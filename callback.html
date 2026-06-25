@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head><title>Enable Banking Callback</title></head>
+<body>
+  <h2>Authorization code:</h2>
+  <code id="code" style="font-size:1.4em; word-break:break-all;"></code>
+  <p id="error" style="color:red;"></p>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('code')) {
+      document.getElementById('code').textContent = params.get('code');
+    } else if (params.get('error')) {
+      document.getElementById('error').textContent = params.get('error');
+    }
+  </script>
+</body>
+</html>
