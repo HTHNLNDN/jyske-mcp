@@ -1,0 +1,244 @@
+import json, sqlite3, time
+from datetime import datetime, timezone
+from pathlib import Path
+
+_SESSION_FILE = Path("~/.config/mcp-bank/session.json").expanduser()
+_CACHE_DB = Path("~/.config/mcp-bank/cache.db").expanduser()
+_CACHE_TTL = 6 * 3600  # aligns with 4-calls/day rate limit
+
+
+class SessionExpiredError(Exception):
+    pass
+
+
+class Storage:
+    def get_session(self) -> dict:
+        if not _SESSION_FILE.exists():
+            raise SessionExpiredError(
+                "No session found. Run setup_consent.py to authenticate."
+            )
+        data = json.loads(_SESSION_FILE.read_text())
+        valid_until = datetime.fromisoformat(data["valid_until"])
+        if datetime.now(timezone.utc) > valid_until:
+            raise SessionExpiredError(
+                f"Session expired on {valid_until.strftime('%Y-%m-%d')}. "
+                "Run setup_consent.py to re-authenticate."
+            )
+        return data
+
+    def save_session(self, data: dict) -> None:
+        _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _SESSION_FILE.write_text(json.dumps(data, indent=2))
+
+    def cache_get(self, key: str) -> dict | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT data, cached_at FROM cache WHERE key = ?", (key,)
+        ).fetchone()
+        conn.close()
+        if row and (time.time() - row[1]) < _CACHE_TTL:
+            return json.loads(row[0])
+        return None
+
+    def cache_set(self, key: str, data: dict) -> None:
+        conn = self._db()
+        conn.execute(
+            "INSERT OR REPLACE INTO cache (key, data, cached_at) VALUES (?, ?, ?)",
+            (key, json.dumps(data), time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def merchant_get(self, raw_name: str) -> dict | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT category_top, category_mid, category_leaf, resolved_name, mcc, source "
+            "FROM merchants WHERE raw_name = ?",
+            (raw_name,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return {
+            "category_top":  row[0],
+            "category_mid":  row[1],
+            "category_leaf": row[2],
+            "resolved_name": row[3],
+            "mcc":           row[4],
+            "source":        row[5],
+        }
+
+    def merchant_set(
+        self,
+        raw_name: str,
+        category_top: str,
+        category_mid: str,
+        category_leaf: str,
+        resolved_name: str = "",
+        mcc: str = "",
+        source: str = "llm",
+    ) -> None:
+        conn = self._db()
+        conn.execute(
+            """INSERT OR REPLACE INTO merchants
+               (raw_name, category_top, category_mid, category_leaf,
+                resolved_name, mcc, source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (raw_name, category_top, category_mid, category_leaf,
+             resolved_name, mcc, source, time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_profile(self, key: str) -> dict | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT value FROM user_profile WHERE key = ?", (key,)
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def set_profile(self, key: str, value: dict) -> None:
+        conn = self._db()
+        conn.execute(
+            "INSERT OR REPLACE INTO user_profile (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, json.dumps(value, ensure_ascii=False), time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def add_session_summary(self, summary: str) -> None:
+        conn = self._db()
+        conn.execute(
+            "INSERT INTO session_summaries (summary, created_at) VALUES (?, ?)",
+            (summary, time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_recent_summaries(self, n: int = 3) -> list[str]:
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT summary FROM session_summaries ORDER BY id DESC LIMIT ?", (n,)
+        ).fetchall()
+        conn.close()
+        return [row[0] for row in reversed(rows)]
+
+    def get_all_summaries(self) -> list[dict]:
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT summary, created_at FROM session_summaries ORDER BY id DESC"
+        ).fetchall()
+        conn.close()
+        return [{"summary": row[0], "created_at": row[1]} for row in rows]
+
+    def get_transactions_cached(self, account_uid: str, date_from: str, date_to: str) -> list[dict]:
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT data FROM cache WHERE key = ?",
+            (f"transactions:{account_uid}:{date_from}:{date_to}",),
+        ).fetchone()
+        conn.close()
+        if rows is None:
+            return []
+        return json.loads(rows[0]).get("transactions", [])
+
+    def get_balances_cached(self, account_uid: str) -> dict | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT data FROM cache WHERE key = ?",
+            (f"balances:{account_uid}",),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def get_last_sync(self) -> dict | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT started_at, completed_at, accounts_synced, transactions_fetched, "
+            "new_transactions, errors FROM syncs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return {
+            "started_at":           row[0],
+            "completed_at":         row[1],
+            "accounts_synced":      row[2],
+            "transactions_fetched": row[3],
+            "new_transactions":     row[4],
+            "errors":               row[5],
+        }
+
+    def record_sync(
+        self,
+        started_at: float,
+        completed_at: float,
+        accounts_synced: int,
+        transactions_fetched: int,
+        new_transactions: int,
+        errors: str,
+    ) -> None:
+        conn = self._db()
+        conn.execute(
+            "INSERT INTO syncs "
+            "(started_at, completed_at, accounts_synced, transactions_fetched, new_transactions, errors) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (started_at, completed_at, accounts_synced, transactions_fetched, new_transactions, errors),
+        )
+        conn.commit()
+        conn.close()
+
+    def _db(self):
+        _CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(_CACHE_DB))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                key TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                cached_at REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS merchants (
+                raw_name      TEXT PRIMARY KEY,
+                category_top  TEXT,
+                category_mid  TEXT,
+                category_leaf TEXT,
+                resolved_name TEXT,
+                mcc           TEXT,
+                source        TEXT,
+                created_at    REAL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                summary    TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_profile (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS syncs (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at           REAL,
+                completed_at         REAL,
+                accounts_synced      INTEGER,
+                transactions_fetched INTEGER,
+                new_transactions     INTEGER,
+                errors               TEXT
+            )
+        """)
+        conn.commit()
+        return conn
