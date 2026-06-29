@@ -115,6 +115,10 @@ class Storage:
             "INSERT INTO session_summaries (summary, created_at) VALUES (?, ?)",
             (summary, time.time()),
         )
+        conn.execute(
+            "DELETE FROM session_summaries WHERE id NOT IN "
+            "(SELECT id FROM session_summaries ORDER BY id DESC LIMIT 10)"
+        )
         conn.commit()
         conn.close()
 
@@ -134,22 +138,69 @@ class Storage:
         conn.close()
         return [{"summary": row[0], "created_at": row[1]} for row in rows]
 
+    def store_transaction(self, account_uid: str, tx: dict) -> None:
+        date = tx.get("booking_date") or tx.get("value_date", "")
+        amt = tx.get("transaction_amount", {})
+        amount = amt.get("amount")
+        currency = amt.get("currency", "")
+        description = (
+            tx.get("creditor_name")
+            or (tx.get("remittance_information") or [""])[0]
+            or tx.get("debtor_name", "")
+        )
+        mcc = tx.get("mcc") or tx.get("merchant_category_code", "")
+        tid = tx.get("transaction_id") or tx.get("entry_reference")
+        conn = self._db()
+        conn.execute(
+            """INSERT INTO transactions
+               (account_uid, transaction_id, date, amount, currency,
+                description, mcc, raw_data, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(transaction_id) DO UPDATE SET
+                 date=excluded.date, amount=excluded.amount,
+                 currency=excluded.currency, description=excluded.description,
+                 mcc=excluded.mcc, raw_data=excluded.raw_data""",
+            (account_uid, tid, date, amount, currency,
+             description, mcc, json.dumps(tx), time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def store_balance(self, account_uid: str, data: dict) -> None:
+        conn = self._db()
+        conn.execute(
+            "INSERT INTO balances (account_uid, data, fetched_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(account_uid) DO UPDATE SET data=excluded.data, fetched_at=excluded.fetched_at",
+            (account_uid, json.dumps(data), time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def balance_fetched_at(self, account_uid: str) -> float | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT fetched_at FROM balances WHERE account_uid = ?",
+            (account_uid,),
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+
     def get_transactions_cached(self, account_uid: str, date_from: str, date_to: str) -> list[dict]:
         conn = self._db()
         rows = conn.execute(
-            "SELECT data FROM cache WHERE key = ?",
-            (f"transactions:{account_uid}:{date_from}:{date_to}",),
-        ).fetchone()
+            "SELECT raw_data FROM transactions "
+            "WHERE account_uid = ? AND date >= ? AND date <= ? "
+            "ORDER BY date DESC",
+            (account_uid, date_from, date_to),
+        ).fetchall()
         conn.close()
-        if rows is None:
-            return []
-        return json.loads(rows[0]).get("transactions", [])
+        return [json.loads(r[0]) for r in rows]
 
     def get_balances_cached(self, account_uid: str) -> dict | None:
         conn = self._db()
         row = conn.execute(
-            "SELECT data FROM cache WHERE key = ?",
-            (f"balances:{account_uid}",),
+            "SELECT data FROM balances WHERE account_uid = ?",
+            (account_uid,),
         ).fetchone()
         conn.close()
         if row is None:
@@ -192,6 +243,105 @@ class Storage:
         )
         conn.commit()
         conn.close()
+
+    def set_budget(
+        self,
+        category_top: str,
+        limit_amount: float,
+        period: str,
+        category_mid: str | None = None,
+    ) -> None:
+        conn = self._db()
+        if category_mid is None:
+            conn.execute(
+                "UPDATE budgets SET active = 0 "
+                "WHERE category_top = ? AND category_mid IS NULL AND period = ? AND active = 1",
+                (category_top, period),
+            )
+        else:
+            conn.execute(
+                "UPDATE budgets SET active = 0 "
+                "WHERE category_top = ? AND category_mid = ? AND period = ? AND active = 1",
+                (category_top, category_mid, period),
+            )
+        conn.execute(
+            "INSERT INTO budgets (category_top, category_mid, limit_amount, period, active, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?)",
+            (category_top, category_mid, limit_amount, period, time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_budgets(self) -> list[dict]:
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT id, category_top, category_mid, limit_amount, period, created_at "
+            "FROM budgets WHERE active = 1 ORDER BY category_top, category_mid",
+        ).fetchall()
+        conn.close()
+        return [
+            {
+                "id":           r[0],
+                "category_top": r[1],
+                "category_mid": r[2],
+                "limit_amount": r[3],
+                "period":       r[4],
+                "created_at":   r[5],
+            }
+            for r in rows
+        ]
+
+    def get_budget_status(self) -> list[dict]:
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d")
+        today = now.strftime("%Y-%m-%d")
+
+        conn = self._db()
+        tx_rows = conn.execute(
+            "SELECT t.description, t.amount, t.raw_data, m.category_top "
+            "FROM transactions t "
+            "LEFT JOIN merchants m ON t.description = m.raw_name "
+            "WHERE t.date >= ? AND t.date <= ?",
+            (month_start, today),
+        ).fetchall()
+
+        spending: dict[str, float] = {}
+        for description, amount, raw_data_json, category_top in tx_rows:
+            try:
+                raw = json.loads(raw_data_json) if raw_data_json else {}
+            except Exception:
+                raw = {}
+            if raw.get("credit_debit_indicator", "DBIT") == "CRDT":
+                continue
+            cat = category_top or "Other"
+            spending[cat] = spending.get(cat, 0.0) + float(amount or 0)
+
+        budget_rows = conn.execute(
+            "SELECT category_top, category_mid, limit_amount, period "
+            "FROM budgets WHERE active = 1",
+        ).fetchall()
+        conn.close()
+
+        result = []
+        for cat_top, cat_mid, limit_amount, period in budget_rows:
+            spent = round(spending.get(cat_top, 0.0), 2)
+            percent = round((spent / limit_amount) * 100, 1) if limit_amount > 0 else 0.0
+            if percent < 80:
+                status = "on_track"
+            elif percent <= 100:
+                status = "warning"
+            else:
+                status = "over"
+            result.append({
+                "category":     cat_top,
+                "category_mid": cat_mid,
+                "spent":        spent,
+                "limit":        limit_amount,
+                "period":       period,
+                "percent":      percent,
+                "status":       status,
+            })
+        return result
 
     def _db(self):
         _CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
@@ -238,6 +388,41 @@ class Storage:
                 transactions_fetched INTEGER,
                 new_transactions     INTEGER,
                 errors               TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_uid    TEXT NOT NULL,
+                transaction_id TEXT UNIQUE,
+                date           TEXT NOT NULL,
+                amount         REAL,
+                currency       TEXT,
+                description    TEXT,
+                mcc            TEXT,
+                category_top   TEXT,
+                category_mid   TEXT,
+                category_leaf  TEXT,
+                raw_data       TEXT,
+                created_at     REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS balances (
+                account_uid TEXT PRIMARY KEY,
+                data        TEXT NOT NULL,
+                fetched_at  REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_top TEXT NOT NULL,
+                category_mid TEXT,
+                limit_amount REAL NOT NULL,
+                period       TEXT NOT NULL DEFAULT 'monthly',
+                active       INTEGER NOT NULL DEFAULT 1,
+                created_at   REAL NOT NULL
             )
         """)
         conn.commit()

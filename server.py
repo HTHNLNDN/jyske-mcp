@@ -85,41 +85,13 @@ def get_transactions(
     """
     Get transactions for an account from local cache.
     date_from and date_to are optional ISO dates (YYYY-MM-DD); defaults to last 30 days.
-    Scans all cached ranges and filters to the requested window.
     """
     if not date_from:
         date_from = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
     if not date_to:
         date_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # The sync stores data under its own date-range keys, so we scan all cached
-    # ranges for this account and filter to the requested window in Python.
-    conn = storage._db()
-    rows = conn.execute(
-        "SELECT data FROM cache WHERE key LIKE ?",
-        (f"transactions:{account_uid}:%",),
-    ).fetchall()
-    conn.close()
-
-    seen: set = set()
-    transactions = []
-    for (data_json,) in rows:
-        for tx in json.loads(data_json).get("transactions", []):
-            tx_date = tx.get("booking_date") or tx.get("value_date", "")
-            if date_from <= tx_date <= date_to:
-                dedup_key = (
-                    tx_date,
-                    tx.get("transaction_amount", {}).get("amount"),
-                    tx.get("creditor_name") or tx.get("debtor_name", ""),
-                )
-                if dedup_key not in seen:
-                    seen.add(dedup_key)
-                    transactions.append(tx)
-
-    transactions.sort(
-        key=lambda t: t.get("booking_date") or t.get("value_date", ""),
-        reverse=True,
-    )
+    transactions = storage.get_transactions_cached(account_uid, date_from, date_to)
 
     if not transactions:
         return (
@@ -301,6 +273,22 @@ def update_memory(session_summary: str, profile_updates: str | None = None) -> s
     if updated:
         parts.append(f"Profile updated: {', '.join(updated)}.")
     return " ".join(parts)
+
+
+@mcp.tool()
+def set_budget(category: str, limit_amount: float, period: str = "monthly") -> str:
+    """Set a spending budget. category must be a top-level category from data/categories.json."""
+    storage.set_budget(category_top=category, limit_amount=limit_amount, period=period)
+    return f"Budget set: {category} — {limit_amount:.2f} / {period}."
+
+
+@mcp.tool()
+def get_budget_status() -> str:
+    """Get current budget status. Always call this as part of the opening brief."""
+    rows = storage.get_budget_status()
+    if not rows:
+        return "No budgets set. Use set_budget to create one."
+    return json.dumps(rows)
 
 
 if __name__ == "__main__":

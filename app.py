@@ -13,6 +13,7 @@ import uvicorn
 import time
 import json
 import os
+import logging
 from datetime import datetime
 from lib.storage import Storage
 
@@ -26,6 +27,8 @@ from server import (
     get_sync_status,
     get_memory,
     update_memory,
+    set_budget,
+    get_budget_status,
 )
 
 APP_PIN = os.environ["APP_PIN"]
@@ -44,6 +47,22 @@ _dir = os.path.dirname(os.path.abspath(__file__))
 SYSTEM_PROMPT = open(os.path.join(_dir, "SYSTEM_PROMPT.md")).read()
 
 anthropic_client = anthropic.Anthropic()
+
+
+def _setup_chat_log() -> logging.Logger:
+    log_dir = os.path.expanduser("~/.config/mcp-bank")
+    os.makedirs(log_dir, exist_ok=True)
+    log = logging.getLogger("mcp_bank.chat")
+    if not log.handlers:
+        h = logging.FileHandler(os.path.join(log_dir, "chat.log"))
+        h.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        log.addHandler(h)
+        log.setLevel(logging.DEBUG)
+        log.propagate = False
+    return log
+
+
+_chat_log = _setup_chat_log()
 
 AGENTS = [
     {
@@ -147,6 +166,37 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "set_budget",
+        "description": (
+            "Set a spending budget for a category.\n"
+            "category must be a top-level category name from the taxonomy.\n"
+            "period defaults to 'monthly'. Replaces any existing budget for that category+period."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Top-level category name (e.g. 'Food & Dining').",
+                },
+                "limit_amount": {
+                    "type": "number",
+                    "description": "Spending limit for the period.",
+                },
+                "period": {
+                    "type": "string",
+                    "description": "Budget period — 'monthly' (default) or 'weekly'.",
+                },
+            },
+            "required": ["category", "limit_amount"],
+        },
+    },
+    {
+        "name": "get_budget_status",
+        "description": "Get current budget status. Always call this as part of the opening brief.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "update_memory",
         "description": (
             "Always call this at the end of every session.\n"
@@ -186,6 +236,8 @@ def _run_tool(name: str, inputs: dict) -> str:
         "get_transactions":       lambda i: get_transactions(**i),
         "categorize_transaction": lambda i: categorize_transaction(**i),
         "get_sync_status":        lambda i: get_sync_status(),
+        "set_budget":             lambda i: set_budget(**i),
+        "get_budget_status":      lambda i: get_budget_status(),
         "update_memory":          lambda i: update_memory(**i),
     }
     fn = dispatch.get(name)
@@ -306,9 +358,11 @@ def get_history():
 @app.post("/chat")
 def chat(req: ChatRequest):
     def generate():
+        _chat_log.info("─── CHAT START ───────────────────────────────────────────")
+        _chat_log.info("USER: %.400s", req.message)
         try:
             messages = list(req.history) + [{"role": "user", "content": req.message}]
-            for _ in range(10):
+            for iteration in range(1, 11):
                 with anthropic_client.messages.stream(
                     model="claude-sonnet-4-6",
                     max_tokens=8096,
@@ -320,18 +374,30 @@ def chat(req: ChatRequest):
                     tools=TOOLS,
                     messages=messages,
                 ) as stream:
+                    reply_chunks: list[str] = []
                     for text in stream.text_stream:
+                        reply_chunks.append(text)
                         yield f"data: {json.dumps(text)}\n\n"
                     final = stream.get_final_message()
 
+                if reply_chunks:
+                    _chat_log.info("ASSISTANT[%d]: %.800s", iteration, "".join(reply_chunks))
+
                 if final.stop_reason != "tool_use":
+                    _chat_log.info(
+                        "─── CHAT END (%d iteration(s), stop=%s) ─────────────────",
+                        iteration, final.stop_reason,
+                    )
                     break
 
                 messages.append({"role": "assistant", "content": final.content})
                 tool_results = []
                 for block in final.content:
                     if block.type == "tool_use":
+                        args_str = json.dumps(block.input, ensure_ascii=False)
+                        _chat_log.info("  TOOL[%d] %s  %s", iteration, block.name, args_str[:600])
                         result = _run_tool(block.name, block.input)
+                        _chat_log.info("  RESULT: %.600s", str(result))
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -339,6 +405,7 @@ def chat(req: ChatRequest):
                         })
                 messages.append({"role": "user", "content": tool_results})
         except Exception as e:
+            _chat_log.info("ERROR: %s", e)
             yield f"data: [ERROR] {e}\n\n"
             return
         yield "data: [DONE]\n\n"

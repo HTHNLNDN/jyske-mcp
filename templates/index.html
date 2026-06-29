@@ -29,7 +29,7 @@
             mantle:    '#e6e9ef',
             surface0:  '#ccd0da',
             surface1:  '#bcc0cc',
-            text:      '#4c4f69',
+            text:      '#A9A9A9',
             subtext:   '#6c6f85',
             accent:    '#1e66f5',
             accentalt: '#8839ef',
@@ -271,13 +271,50 @@
       >
         <template x-for="(msg, idx) in messages" :key="idx">
           <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
-            <div
-              class="max-w-[80%] text-sm leading-relaxed rounded-2xl px-4 py-2.5 whitespace-pre-wrap"
-              :class="msg.role === 'user'
-                ? 'bg-accent text-white font-[450] rounded-tr-sm'
-                : 'bg-surface0 border-l-2 border-accent/40 text-text rounded-tl-sm'"
-              x-text="msg.content"
-            ></div>
+
+            <!-- Budget card — assistant message that parses as a budget JSON array -->
+            <template x-if="msg.role === 'assistant' && parseBudget(msg.content)">
+              <div class="w-full max-w-sm bg-surface0 rounded-2xl rounded-tl-sm border-t-2 border-accent overflow-hidden">
+                <div class="px-4 pt-3 pb-2.5 border-b border-surface1 flex items-baseline gap-1.5">
+                  <span class="text-[11px] font-semibold tracking-[0.12em] uppercase text-subtext">Budget Status</span>
+                  <span class="text-[11px] text-subtext/60">· <span x-text="currentMonth()"></span></span>
+                </div>
+                <div class="px-4 py-3 space-y-4">
+                  <template x-for="(row, ri) in parseBudget(msg.content)" :key="ri">
+                    <div>
+                      <div class="flex justify-between items-baseline mb-1.5">
+                        <span class="text-sm text-text" x-text="row.category"></span>
+                        <span class="text-xs font-mono tabular-nums"
+                          :class="row.status === 'over' ? 'text-danger font-semibold' : row.status === 'warning' ? 'text-warning' : 'text-subtext'"
+                          x-text="row.status === 'over' ? 'OVER' : row.percent + '%'">
+                        </span>
+                      </div>
+                      <div class="h-2 bg-surface1 rounded-full overflow-hidden">
+                        <div class="h-full rounded-full"
+                          :class="row.status === 'over' ? 'bg-danger' : row.status === 'warning' ? 'bg-warning' : 'bg-accent'"
+                          :style="'width:' + Math.min(row.percent, 100) + '%'">
+                        </div>
+                      </div>
+                      <div class="mt-1 text-right text-xs text-subtext/70 tabular-nums"
+                        x-text="row.spent.toLocaleString('da-DK') + ' / ' + row.limit.toLocaleString('da-DK') + ' DKK'">
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- Plain text — all user messages and non-budget assistant messages -->
+            <template x-if="msg.role === 'user' || !parseBudget(msg.content)">
+              <div
+                class="max-w-[80%] text-sm leading-relaxed rounded-2xl px-4 py-2.5 whitespace-pre-wrap"
+                :class="msg.role === 'user'
+                  ? 'bg-accent text-white font-[450] rounded-tr-sm'
+                  : 'bg-surface0 border-l-2 border-accent/40 text-text rounded-tl-sm'"
+                x-text="msg.content"
+              ></div>
+            </template>
+
           </div>
         </template>
 
@@ -606,6 +643,20 @@
             this._countdownInterval = null
           }
           this.$nextTick(() => this.$refs.pinInput?.focus())
+        },
+
+        parseBudget(content) {
+          try {
+            const data = JSON.parse(content)
+            if (Array.isArray(data) && data.length > 0 && 'category' in data[0] && 'spent' in data[0]) {
+              return data
+            }
+          } catch (_) {}
+          return null
+        },
+
+        currentMonth() {
+          return new Date().toLocaleString('en-US', { month: 'long' })
         },
       }
     }

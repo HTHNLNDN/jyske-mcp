@@ -43,32 +43,18 @@ _BASELINE_DAYS = 90        # how far back to go on first run
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _most_recent_tx_date(storage: Storage, account_uid: str) -> str | None:
-    """Return the most recent booking_date stored across all cached ranges for this account."""
-    conn = storage._db()
-    rows = conn.execute(
-        "SELECT data FROM cache WHERE key LIKE ?",
-        (f"transactions:{account_uid}:%",),
-    ).fetchall()
-    conn.close()
-
-    max_date: str | None = None
-    for (data_json,) in rows:
-        for tx in json.loads(data_json).get("transactions", []):
-            date = tx.get("booking_date") or tx.get("value_date")
-            if date and (max_date is None or date > max_date):
-                max_date = date
-    return max_date
+    """Return the most recent booking_date stored in the transactions table for this account."""
+    rows = storage.get_transactions_cached(account_uid, "0000-01-01", "9999-12-31")
+    if not rows:
+        return None
+    tx = rows[0]
+    return tx.get("booking_date") or tx.get("value_date")
 
 
 def _balance_stale(storage: Storage, account_uid: str) -> bool:
     """True if no balance data cached or last fetch was more than 6 hours ago."""
-    conn = storage._db()
-    row = conn.execute(
-        "SELECT cached_at FROM cache WHERE key = ?",
-        (f"balances:{account_uid}",),
-    ).fetchone()
-    conn.close()
-    return row is None or (time.time() - row[0]) >= _BALANCE_TTL
+    fetched_at = storage.balance_fetched_at(account_uid)
+    return fetched_at is None or (time.time() - fetched_at) >= _BALANCE_TTL
 
 
 def _batch_categorize(items: list[dict], storage: Storage) -> None:
@@ -195,8 +181,8 @@ def run_sync() -> None:
         )
         total_new += new_count
 
-        cache_key = f"transactions:{uid}:{date_from}:{today}"
-        storage.cache_set(cache_key, data)
+        for tx in transactions:
+            storage.store_transaction(uid, tx)
         log.info("%s: %d fetched, %d new, %d already had", product, fetched, new_count, fetched - new_count)
 
         # categorize only genuinely new transactions
@@ -226,7 +212,7 @@ def run_sync() -> None:
                 if r.status_code == 401:
                     raise SessionExpiredError("API 401")
                 r.raise_for_status()
-                storage.cache_set(f"balances:{uid}", r.json())
+                storage.store_balance(uid, r.json())
                 log.info("%s: balances refreshed", product)
             except Exception as e:
                 log.error("%s: balance fetch failed: %s", product, e)
