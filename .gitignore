@@ -5,4 +5,13 @@
 session.json
 __pycache__/
 .venv/
-.claude/settings.local.json
+.claude/*
+frontend/node_modules/
+static/dist/
+claude.md
+research/*
+.playwright-mcp/*
+ideas/*
+data/*.bak*
+data/*.db
+data/*.sqlite

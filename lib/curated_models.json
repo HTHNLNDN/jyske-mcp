@@ -1,0 +1,16 @@
+{
+  "anthropic": { "label": "Anthropic", "models": [
+      { "id": "anthropic/claude-haiku-4-5", "label": "Claude Haiku 4.5 — fast, cheap" },
+      { "id": "anthropic/claude-sonnet-5", "label": "Claude Sonnet 5 — balanced" },
+      { "id": "anthropic/claude-opus-4-8", "label": "Claude Opus 4.8 — flagship" } ] },
+  "openai": { "label": "OpenAI", "models": [
+      { "id": "openai/gpt-5.4-mini", "label": "GPT-5.4 mini — fast, cheap" },
+      { "id": "openai/gpt-5.4", "label": "GPT-5.4 — balanced" },
+      { "id": "openai/gpt-5.5", "label": "GPT-5.5 — flagship" } ] },
+  "gemini": { "label": "Google Gemini", "models": [
+      { "id": "gemini/gemini-2.5-flash", "label": "Gemini 2.5 Flash — fast, cheap" },
+      { "id": "gemini/gemini-2.5-pro", "label": "Gemini 2.5 Pro — flagship" } ] },
+  "deepseek": { "label": "DeepSeek", "models": [
+      { "id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash — fast, cheap" },
+      { "id": "deepseek/deepseek-v4-pro", "label": "DeepSeek V4 Pro — reasoning" } ] }
+}

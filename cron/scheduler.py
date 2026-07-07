@@ -1,4 +1,6 @@
 import logging
+import os
+import secrets
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,11 +13,13 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
 
 from sync import run_sync
+from evals import run_evals
+from tips import run_tips
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,21 +29,44 @@ log = logging.getLogger("scheduler")
 
 scheduler = BackgroundScheduler()
 
+# TODO: retired autonomous backlog-refinement job (shelled out to the claude
+# CLI from this banking process). If revived it belongs in a separate
+# user-level process, never co-located with live-banking sync/evals/tips.
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not os.environ.get("SCHEDULER_SECRET"):
+        log.warning(
+            "SCHEDULER_SECRET is unset/empty — the scheduler will reject all "
+            "/sync and /tips trigger requests until it's set."
+        )
     scheduler.add_job(run_sync, "cron", hour=3, minute=0, id="daily_sync")
+    scheduler.add_job(run_evals, "cron", hour=4, minute=0, id="nightly_evals")
+    scheduler.add_job(run_tips, "cron", hour=4, minute=30, id="nightly_tip")
     scheduler.start()
-    log.info("Scheduler started — daily sync at 03:00")
+    log.info(
+        "Scheduler started — daily sync at 03:00, nightly evals at 04:00, "
+        "nightly tip of the day at 04:30"
+    )
     yield
     scheduler.shutdown()
     log.info("Scheduler stopped")
 
 
+def require_scheduler_secret(x_scheduler_secret: str | None = Header(default=None)):
+    expected = os.environ.get("SCHEDULER_SECRET", "")
+    if not expected:
+        log.warning("SCHEDULER_SECRET is unset/empty — rejecting scheduler request (fail-closed)")
+        raise HTTPException(status_code=503, detail="scheduler auth not configured")
+    if not secrets.compare_digest(x_scheduler_secret or "", expected):
+        raise HTTPException(status_code=401, detail="invalid or missing scheduler secret")
+
+
 app = FastAPI(lifespan=lifespan)
 
 
-@app.post("/sync/trigger")
+@app.post("/sync/trigger", dependencies=[Depends(require_scheduler_secret)])
 def trigger_sync():
     log.info("Manual sync triggered via /sync/trigger")
     try:
@@ -50,7 +77,18 @@ def trigger_sync():
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
 
 
-@app.get("/sync/status")
+@app.post("/tips/trigger", dependencies=[Depends(require_scheduler_secret)])
+def trigger_tips():
+    log.info("Manual tip generation triggered via /tips/trigger")
+    try:
+        run_tips()
+        return {"status": "ok"}
+    except Exception as e:
+        log.error("Manual tip generation failed: %s", e)
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+@app.get("/sync/status", dependencies=[Depends(require_scheduler_secret)])
 def sync_status():
     from lib.storage import Storage
     last = Storage().get_last_sync()
@@ -70,4 +108,4 @@ def sync_status():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8081)
+    uvicorn.run(app, host="127.0.0.1", port=8081)

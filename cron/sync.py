@@ -12,11 +12,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-import anthropic
 import requests
 
 from lib.auth import auth_headers, BASE_URL
 from lib.categorizer import categorize
+from lib.llm import simple_completion
 from lib.storage import Storage, SessionExpiredError
 
 # ── logging ───────────────────────────────────────────────────────────────────
@@ -42,15 +42,6 @@ _BASELINE_DAYS = 90        # how far back to go on first run
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _most_recent_tx_date(storage: Storage, account_uid: str) -> str | None:
-    """Return the most recent booking_date stored in the transactions table for this account."""
-    rows = storage.get_transactions_cached(account_uid, "0000-01-01", "9999-12-31")
-    if not rows:
-        return None
-    tx = rows[0]
-    return tx.get("booking_date") or tx.get("value_date")
-
-
 def _balance_stale(storage: Storage, account_uid: str) -> bool:
     """True if no balance data cached or last fetch was more than 6 hours ago."""
     fetched_at = storage.balance_fetched_at(account_uid)
@@ -59,8 +50,10 @@ def _balance_stale(storage: Storage, account_uid: str) -> bool:
 
 def _batch_categorize(items: list[dict], storage: Storage) -> None:
     """
-    Single Anthropic call to categorize a deduplicated batch of merchants.
-    Uses Haiku — fast and cheap for a straightforward classification task.
+    Single LLM call to categorize a deduplicated batch of merchants.
+    Hardcoded to Haiku regardless of LLM_MODEL — fast and cheap for a
+    straightforward classification task, and this is a cost-sensitive
+    background job rather than the user-facing chat model.
     Stores each result via storage.merchant_set.
     """
     if not items:
@@ -78,18 +71,12 @@ def _batch_categorize(items: list[dict], storage: Storage) -> None:
         "Use exactly these top-level categories:\n"
         "Food & Dining, Shopping, Transport, Travel, Health & Wellness, Entertainment, "
         "Home & Utilities, Finance & Insurance, Education, Personal Services, "
-        "Professional & Business Services, Government & Non-profit, Other\n\n"
+        "Professional & Business Services, Government & Non-profit, Agriculture & Industry, Other\n\n"
         f"Merchants:\n{merchants_json}"
     )
 
     try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
+        text = simple_completion(prompt, model="claude-haiku-4-5-20251001").strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
@@ -107,9 +94,69 @@ def _batch_categorize(items: list[dict], storage: Storage) -> None:
         log.error("Batch categorization failed: %s", e)
 
 
+def _fetch_transactions(
+    uid: str, date_from: str, date_to: str, *, max_pages: int = 50
+) -> tuple[list[dict], list[int], str | None]:
+    """
+    Fetch all pages of transactions for an account, following Enable Banking's
+    top-level `continuation_key` field. Termination is `not continuation_key`
+    — NEVER an empty-page short-circuit, since an empty page can still carry
+    a continuation key.
+
+    Raises SessionExpiredError on HTTP 401 on any page (session-scoped key is
+    dead after re-auth, so it's never worth preserving partial progress there).
+    On a 429 (ASPSP rate limit) or any error after page 1, partial progress is
+    preserved and returned with a `truncated` reason instead of raising —
+    pagination simply stops for this run and resumes on the next one.
+
+    Returns (transactions, page_counts, truncated_reason).
+    """
+    url = f"{BASE_URL}/accounts/{uid}/transactions"
+    base_params = {"date_from": date_from, "date_to": date_to}
+
+    transactions: list[dict] = []
+    page_counts: list[int] = []
+    continuation: str | None = None
+    truncated: str | None = None
+
+    while True:
+        params = dict(base_params)
+        if continuation:
+            params["continuation_key"] = continuation
+        try:
+            r = requests.get(url, headers=auth_headers(), params=params)
+            if r.status_code == 401:
+                raise SessionExpiredError("EXPIRED_SESSION — API 401 on transaction fetch")
+            if r.status_code == 429:
+                truncated = f"rate-limited (429) after {len(page_counts)} page(s); resumes next run"
+                break
+            r.raise_for_status()
+            data = r.json()
+        except SessionExpiredError:
+            raise
+        except Exception as e:
+            if not page_counts:
+                raise  # page-1 failure → caller's generic except
+            truncated = f"aborted after {len(page_counts)} page(s): {e}"
+            break
+
+        page = data.get("transactions", [])
+        transactions.extend(page)
+        page_counts.append(len(page))
+
+        continuation = data.get("continuation_key")
+        if not continuation:
+            break  # THE exhaustion signal — never len(page) == 0
+        if len(page_counts) >= max_pages:
+            truncated = f"hit max_pages={max_pages} with continuation_key still present"
+            break
+
+    return transactions, page_counts, truncated
+
+
 # ── main sync ─────────────────────────────────────────────────────────────────
 
-def run_sync() -> None:
+def run_sync(months_back: int | None = None) -> None:
     started_at = time.time()
     log.info("─── Sync started ───────────────────────────────────────────")
 
@@ -129,7 +176,15 @@ def run_sync() -> None:
         return
 
     accounts = session.get("accounts", [])
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_dt = datetime.now(timezone.utc)
+    today = today_dt.strftime("%Y-%m-%d")
+
+    # In backfill mode (months_back given), fetch may return genuinely-new
+    # transactions older than the incremental cursor, so the usual
+    # tx_date > most_recent optimization would silently skip categorizing
+    # them. Force every newly-stored transaction through categorization in
+    # that case — the merchant cache keeps re-checks cheap.
+    categorize_all = months_back is not None
 
     for acc in accounts:
         uid = acc["uid"]
@@ -137,9 +192,14 @@ def run_sync() -> None:
 
         # ── transactions ──────────────────────────────────────────────────────
 
-        most_recent = _most_recent_tx_date(storage, uid)
+        most_recent = storage.most_recent_transaction_date(uid)
 
-        if most_recent:
+        if months_back is not None:
+            # explicit backfill request takes precedence over the incremental
+            # cursor, even for accounts that already have stored data.
+            date_from = (today_dt - timedelta(days=months_back * 31)).strftime("%Y-%m-%d")
+            log.info("%s: backfill %d month(s)  %s → %s", product, months_back, date_from, today)
+        elif most_recent:
             # one day overlap: catches transactions that settled or were backdated
             date_from = (
                 datetime.strptime(most_recent, "%Y-%m-%d") - timedelta(days=1)
@@ -152,15 +212,7 @@ def run_sync() -> None:
             log.info("%s: first run, baseline %d days  %s → %s", product, _BASELINE_DAYS, date_from, today)
 
         try:
-            r = requests.get(
-                f"{BASE_URL}/accounts/{uid}/transactions",
-                headers=auth_headers(),
-                params={"date_from": date_from, "date_to": today},
-            )
-            if r.status_code == 401:
-                raise SessionExpiredError("API 401 — re-run setup_consent.py")
-            r.raise_for_status()
-            data = r.json()
+            transactions, page_counts, truncated = _fetch_transactions(uid, date_from, today)
         except SessionExpiredError as e:
             log.error("%s: %s", product, e)
             errors.append(f"{product}: {e}")
@@ -170,9 +222,18 @@ def run_sync() -> None:
             errors.append(f"{product} transactions: {e}")
             continue
 
-        transactions = data.get("transactions", [])
+        pages = len(page_counts)
         fetched = len(transactions)
         total_fetched += fetched
+
+        # page-count sanity invariant — log-and-continue, never hard-fail the run
+        if fetched != sum(page_counts):
+            msg = f"page-count mismatch: {fetched} accumulated vs {sum(page_counts)} summed across {pages} page(s)"
+            log.error("%s: %s", product, msg)
+            errors.append(f"{product} transactions: {msg}")
+        if truncated:
+            log.warning("%s: pagination incomplete — %s", product, truncated)
+            errors.append(f"{product} transactions: {truncated}")
 
         # new = booking_date strictly after the previous most-recent date
         new_count = sum(
@@ -181,14 +242,24 @@ def run_sync() -> None:
         )
         total_new += new_count
 
-        for tx in transactions:
-            storage.store_transaction(uid, tx)
-        log.info("%s: %d fetched, %d new, %d already had", product, fetched, new_count, fetched - new_count)
+        try:
+            storage.store_transactions_batch(uid, transactions)
+        except Exception as e:
+            log.error("%s: storing transactions failed: %s", product, e)
+            errors.append(f"{product} transactions: store failed: {e}")
+            continue
+        log.info(
+            "%s: %d fetched across %d page(s), %d new, %d already had",
+            product, fetched, pages, new_count, fetched - new_count,
+        )
 
-        # categorize only genuinely new transactions
+        # categorize genuinely new transactions — in backfill mode
+        # (categorize_all) also include newly-stored transactions older than
+        # `most_recent`, since backfill can fetch real history predating the
+        # existing cursor.
         for tx in transactions:
             tx_date = tx.get("booking_date") or tx.get("value_date", "")
-            if tx_date <= (most_recent or ""):
+            if not categorize_all and tx_date <= (most_recent or ""):
                 continue
             raw_name = (
                 tx.get("creditor_name")
@@ -210,7 +281,7 @@ def run_sync() -> None:
                     headers=auth_headers(),
                 )
                 if r.status_code == 401:
-                    raise SessionExpiredError("API 401")
+                    raise SessionExpiredError("EXPIRED_SESSION — API 401 on balance fetch")
                 r.raise_for_status()
                 storage.store_balance(uid, r.json())
                 log.info("%s: balances refreshed", product)
@@ -228,6 +299,8 @@ def run_sync() -> None:
             "date_to": today,
             "fetched": fetched,
             "new": new_count,
+            "pages": pages,
+            "truncated": truncated,
         })
 
     # ── batch LLM categorization ──────────────────────────────────────────────
@@ -245,6 +318,12 @@ def run_sync() -> None:
     else:
         log.info("No unknown merchants — categorization skipped")
 
+    # Backfill any transaction rows that still lack a category now that the
+    # merchants table above may have just gained new entries.
+    backfilled = storage.backfill_categories()
+    if backfilled:
+        log.info("Backfilled category columns on %d transaction row(s)", backfilled)
+
     # ── record ────────────────────────────────────────────────────────────────
 
     completed_at = time.time()
@@ -258,6 +337,18 @@ def run_sync() -> None:
         new_transactions=total_new,
         errors=details_payload,
     )
+
+    # ── budget history ───────────────────────────────────────────────────────
+    # snapshot each active budget's spend-to-date so pattern detection
+    # (get_overspend_patterns) always has fresh data to work from.
+    for row in storage.get_budget_status(agent_id="finance"):
+        storage.record_budget_history(
+            agent_id="finance",
+            category_top=row["category"],
+            period=row["period"],
+            limit_amount=row["limit"],
+            actual_amount=row["spent"],
+        )
 
     log.info(
         "Done in %.1fs — %d accounts, %d fetched (%d new), %d LLM-categorized, %d errors",

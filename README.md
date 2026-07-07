@@ -38,6 +38,60 @@ Enable Banking handles the Open Banking consent flow and proxies requests to Jys
 
 ---
 
+## Web app
+
+A PWA finance companion — Vue 3 + Vite frontend in [`frontend/`](frontend/), served by the FastAPI app in [`app.py`](app.py). PIN-gated and installable on iPhone via "Add to Home Screen".
+
+**During development** run two terminals:
+
+```bash
+make dev     # Vite dev server with HMR  → http://localhost:5173
+make start   # FastAPI backend           → http://localhost:8080
+```
+
+Develop against **http://localhost:5173** — the Vite dev server proxies `/auth`, `/agents`, `/chat`, `/history`, `/static`, and `/api` to the backend on `:8080`.
+
+**For production / iPhone:**
+
+```bash
+make build   # bundles the frontend into static/dist/
+make start   # FastAPI serves the built app at http://localhost:8080
+```
+
+Then open **http://localhost:8080** and install via "Add to Home Screen".
+
+`make sync` runs the daily transaction sync scheduler ([`cron/scheduler.py`](cron/scheduler.py)).
+
+---
+
+## Database migrations
+
+The local SQLite cache (`~/.config/mcp-bank/cache.db`) is managed with [Alembic](https://alembic.sqlalchemy.org/). The app no longer creates tables itself — if the schema is missing or out of date, it logs a warning on startup instead of auto-migrating.
+
+**First-time setup** — after cloning, create the schema before running the app:
+
+```bash
+make migrate
+```
+
+**After pulling new changes** — if a pull brings new migrations, run the same command to bring your local db up to date:
+
+```bash
+make migrate
+```
+
+**Creating a new migration** — after changing the schema (e.g. editing a `CREATE TABLE` in a migration file), generate a new revision:
+
+```bash
+make migration name="describe_the_change"
+```
+
+Then edit the generated file in `migrations/versions/` to add the `upgrade()`/`downgrade()` SQL.
+
+Other useful targets: `make db-status` (current revision) and `make db-history` (full migration history).
+
+---
+
 ## Example conversations
 
 These are meant to give a feel for how the companion behaves in practice. All amounts are in DKK.

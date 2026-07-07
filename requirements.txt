@@ -3,8 +3,15 @@ apscheduler>=3.10.0
 fastapi>=0.115.0
 aiofiles>=23.0.0
 uvicorn>=0.32.0
-anthropic>=0.40.0
+litellm>=1.83.0
+langfuse>=2.60.0,<3
+pydantic>=2.13.0  # langfuse 2.x's bundled pydantic.v1 shim needs this on py3.14 (see lib/llm.py); litellm pins ==2.12.5 but works fine with 2.13.x in practice
 itsdangerous>=2.2.0
+alembic>=1.18.0
+sqlalchemy>=2.0.0
+pre-commit>=4.6.0  # local git hook framework; see .pre-commit-config.yaml
+pytest>=8.0   # test suite; run with make test
+httpx>=0.27.0  # dev/test: FastAPI TestClient (starlette) transport
 certifi==2026.6.17
 cffi==2.0.0
 charset-normalizer==3.4.7
