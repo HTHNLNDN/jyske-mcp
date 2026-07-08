@@ -1,7 +1,7 @@
 # This file must never call the Enable Banking API directly for financial
 # data (balances/transactions) — that all comes from SQLite, see
-# cron/sync.py. The one exception is the consent/re-authorization bootstrap
-# (lib/consent.py), which necessarily talks to Enable Banking's /auth and
+# jyske_mcp/jobs/sync.py. The one exception is the consent/re-authorization bootstrap
+# (jyske_mcp/consent.py), which necessarily talks to Enable Banking's /auth and
 # /sessions endpoints as part of the OAuth redirect flow.
 
 from fastapi import FastAPI, Request, Response
@@ -18,12 +18,13 @@ import json
 import os
 import logging
 from datetime import datetime, timezone
-from lib.storage import Storage
-from lib.categorizer import category_tree
-from lib import consent as consent_lib
-from lib.models import all_model_ids, load_catalog
-from cron.sync import run_sync
-from lib.llm import (
+from jyske_mcp.config import ENV_FILE, ROOT_DIR
+from jyske_mcp.storage import Storage
+from jyske_mcp.categorizer import category_tree
+from jyske_mcp import consent as consent_lib
+from jyske_mcp.model_catalog import all_model_ids, load_catalog
+from jyske_mcp.jobs.sync import run_sync
+from jyske_mcp.llm import (
     chat_completion,
     resolve_agent_llm,
     LLMNotConfiguredError,
@@ -35,9 +36,9 @@ from lib.llm import (
     end_generation,
 )
 
-load_dotenv()
+load_dotenv(ENV_FILE)
 
-from server import (
+from jyske_mcp.mcp.server import (
     list_accounts,
     get_balances,
     get_transactions,
@@ -78,8 +79,9 @@ LOCKOUT_SECONDS = 60
 _sync_lock = threading.Lock()
 _sync_state = {"running": False, "error": None, "started_at": None}
 
-_dir = os.path.dirname(os.path.abspath(__file__))
-SYSTEM_PROMPT = open(os.path.join(_dir, "SYSTEM_PROMPT.md")).read()
+_pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/jyske_mcp/
+_dir = str(ROOT_DIR)  # repo root — static/ and the frontend build live here, not in the package
+SYSTEM_PROMPT = open(os.path.join(_pkg_dir, "prompts", "system_prompt.md")).read()
 
 # Built Vue frontend (produced by `make build` → frontend/vite.config.js outDir).
 DIST_DIR = os.path.join(_dir, "static", "dist")
@@ -991,7 +993,7 @@ def tip_today():
 @app.post("/tip/feedback")
 def tip_feedback(req: TipFeedbackRequest):
     # UI path specifically — free-text only, no verdict choice (see
-    # cron/tips.py / server.submit_tip_feedback for the chat path, which
+    # jyske_mcp/jobs/tips.py / server.submit_tip_feedback for the chat path, which
     # always records an explicit accepted/rejected verdict instead).
     try:
         Storage().set_tip_feedback(
@@ -1133,9 +1135,9 @@ def consent_status():
     last_error = None
     if last_sync and last_sync.get("errors"):
         # get_last_sync()'s "errors" holds either a plain error string (session
-        # failures, recorded directly by cron/sync.py) or a JSON blob with
-        # per-account details (see cron/sync.py's details_payload) — mirror
-        # cron/scheduler.py's /sync/status route and pass it through as-is.
+        # failures, recorded directly by jyske_mcp/jobs/sync.py) or a JSON blob with
+        # per-account details (see jyske_mcp/jobs/sync.py's details_payload) — mirror
+        # jyske_mcp/jobs/scheduler.py's /sync/status route and pass it through as-is.
         last_error = last_sync["errors"]
 
     if session is None:
@@ -1219,7 +1221,7 @@ def _sync_worker(months: int | None) -> None:
 
 @app.post("/sync/trigger")
 def sync_trigger(req: SyncTriggerRequest):
-    # User-facing, authenticated manual sync — distinct from cron/scheduler.py's
+    # User-facing, authenticated manual sync — distinct from jyske_mcp/jobs/scheduler.py's
     # own :8081 /sync/trigger (internal cron process), which is left untouched.
     months = max(1, min(req.months_back, 12)) if req.months_back is not None else None
 
@@ -1239,7 +1241,7 @@ def sync_trigger(req: SyncTriggerRequest):
 
 @app.get("/sync/status")
 def sync_status():
-    # last_sync shape mirrors cron/scheduler.py's own /sync/status exactly
+    # last_sync shape mirrors jyske_mcp/jobs/scheduler.py's own /sync/status exactly
     # (ISO-formatted started_at/completed_at, "details" holding the raw
     # errors/per-account JSON blob) so both consumers see the same shape.
     last = Storage().get_last_sync()

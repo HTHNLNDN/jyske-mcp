@@ -31,7 +31,7 @@ def upgrade() -> None:
     # Backfill category columns from the merchants cache for any rows that
     # were stored before a merchant had been categorized (store_transaction
     # only writes category_* when categorize() already has an answer at
-    # insert time — see lib/storage.py).
+    # insert time — see jyske_mcp/storage.py).
     op.execute("""
         UPDATE transactions
         SET category_top = (

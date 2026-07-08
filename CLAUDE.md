@@ -13,7 +13,7 @@ tooling, not app code; you may edit those directly rather than delegating.)
 - tester: manual walkthrough after a change is implemented, read-only
 - researcher: read-only web researcher — library evaluations, API docs/quirks,
   SOTA approaches, pricing, breaking changes. Produces a sourced brief cached
-  under `research/briefs/` and persists structured facts to the research
+  under `.agent/research/briefs/` and persists structured facts to the research
   knowledge graph (`~/.config/mcp-bank/research_graph.sqlite`, via the
   `research-mcp` MCP server). Never writes or edits code.
 

@@ -2,8 +2,8 @@ import hashlib, json, logging, os, sqlite3, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from lib.categorizer import categorize
-from lib.config import CONFIG_DIR, DB_FILE, SESSION_FILE
+from jyske_mcp.categorizer import categorize
+from jyske_mcp.config import CONFIG_DIR, DB_FILE, SESSION_FILE, ROOT_DIR
 
 log = logging.getLogger("storage")
 
@@ -369,7 +369,7 @@ class Storage:
 
     def most_recent_transaction_date(self, account_uid: str) -> str | None:
         """Cheap MAX(date) cursor for incremental sync — replaces
-        cron/sync.py's old _most_recent_tx_date, which pulled every cached
+        jyske_mcp/jobs/sync.py's old _most_recent_tx_date, which pulled every cached
         transaction row (raw_data included) for the account just to read
         rows[0]["booking_date"] off the newest one."""
         conn = self._db()
@@ -435,7 +435,7 @@ class Storage:
     def remap_account_uid(self, old_uid: str, new_uid: str) -> None:
         """Re-key cached transactions/balances from an old account uid to a
         new one. uids can change across re-authorization sessions even for
-        the same physical account; called from lib/consent.py reconciliation
+        the same physical account; called from jyske_mcp/consent.py reconciliation
         when identification_hash matches an account from the prior session."""
         if old_uid == new_uid:
             return
@@ -1064,7 +1064,7 @@ class Storage:
         agent_id: str = "finance",
     ) -> int:
         """INSERT a new tip row, returning its id. UNIQUE(agent_id, tip_date)
-        is the DB-level backstop against duplicates — the caller (cron/tips.py)
+        is the DB-level backstop against duplicates — the caller (jyske_mcp/jobs/tips.py)
         already checks get_tip_for_date first, but this raises
         sqlite3.IntegrityError instead of silently duplicating if that guard
         is ever bypassed or racing."""
@@ -1331,9 +1331,8 @@ def _check_schema_version() -> None:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        root = Path(__file__).resolve().parent.parent
-        cfg = Config(str(root / "alembic.ini"))
-        cfg.set_main_option("script_location", str(root / "migrations"))
+        cfg = Config(str(ROOT_DIR / "alembic.ini"))
+        cfg.set_main_option("script_location", str(ROOT_DIR / "migrations"))
         head_rev = ScriptDirectory.from_config(cfg).get_current_head()
     except Exception:
         return  # don't block startup if alembic itself can't be introspected

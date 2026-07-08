@@ -1,13 +1,21 @@
-# Research knowledge graph MCP server. Backed by lib/research_graph.py, which
-# stores a relationally-modeled knowledge graph in its own SQLite file — this
-# is institutional memory for research findings and past architecture
-# decisions, separate from the banking data and its Alembic-tracked SQLite
-# store in server.py.
+# Research knowledge graph MCP server — dev/agent tooling, not product code.
+# Backed by graph.py (same directory), which stores a relationally-modeled
+# knowledge graph in its own SQLite file — this is institutional memory for
+# research findings and past architecture decisions, separate from the banking
+# data and its Alembic-tracked SQLite store in jyske_mcp.mcp.server.
+#
+# Invoked by absolute path as a stdio MCP server (see ~/.claude.json), so the
+# sibling modules are put on sys.path here instead of installing a package.
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from mcp.server.fastmcp import FastMCP
 
-from lib.research_graph import ResearchGraph
-from lib.research_schema import ResearchFacts
+from graph import ResearchGraph
+from schema import ResearchFacts
 
 mcp = FastMCP("research")
 graph = ResearchGraph()

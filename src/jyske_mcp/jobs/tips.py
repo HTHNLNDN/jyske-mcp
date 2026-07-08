@@ -6,25 +6,22 @@ tip grounded in a real number/merchant/category, and persists it — along with
 exactly what data justified it — so accumulated tips + feedback become a
 genuine evaluation dataset over time.
 
-Registered from cron/scheduler.py at 04:30, after the 03:00 sync and 04:00
-evals jobs. Mirrors cron/evals.py's structure (dotenv/path/logging setup,
+Registered from jyske_mcp/jobs/scheduler.py at 04:30, after the 03:00 sync and 04:00
+evals jobs. Mirrors jyske_mcp/jobs/evals.py's structure (dotenv/path/logging setup,
 never-raise entrypoint) — see that module for the reasoning behind each of
 those choices.
 """
 
 import json
-import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# project root on path so lib/ imports work regardless of CWD
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# load .env before lib/llm.py reads os.environ at import time
+# load .env before jyske_mcp/llm.py reads os.environ at import time
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+from jyske_mcp.config import ENV_FILE
+load_dotenv(ENV_FILE)
 
-# Reuse the exact same log file/format as cron/sync.py so tip-generation
+# Reuse the exact same log file/format as jyske_mcp/jobs/sync.py so tip-generation
 # lines show up alongside sync's/evals' own summary lines.
 import logging
 
@@ -41,15 +38,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("tips")
 
-from lib.categorizer import top_categories
-from lib.llm import LLMNotConfiguredError, resolve_agent_llm, simple_completion
-from lib.storage import Storage
+from jyske_mcp.categorizer import top_categories
+from jyske_mcp.llm import LLMNotConfiguredError, resolve_agent_llm, simple_completion
+from jyske_mcp.storage import Storage
 
 # server.py's tool functions are plain Python functions returning JSON
 # strings — same import-and-call pattern app.py already uses for _run_tool,
 # not an MCP client round-trip. server.py itself never calls Enable Banking
 # directly, so this stays within the "server.py reads from SQLite only" rule.
-from server import (
+from jyske_mcp.mcp.server import (
     get_spending,
     compare_spending,
     recurring_charges,

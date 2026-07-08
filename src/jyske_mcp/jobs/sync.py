@@ -1,23 +1,20 @@
 import json
 import logging
-import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# project root on path so lib/ imports work regardless of CWD
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# load .env before lib/auth.py reads os.environ at import time
+# load .env before jyske_mcp/auth.py reads os.environ at import time
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+from jyske_mcp.config import ENV_FILE
+load_dotenv(ENV_FILE)
 
 import requests
 
-from lib.auth import auth_headers, BASE_URL
-from lib.categorizer import categorize
-from lib.llm import simple_completion
-from lib.storage import Storage, SessionExpiredError
+from jyske_mcp.auth import auth_headers, BASE_URL
+from jyske_mcp.categorizer import categorize
+from jyske_mcp.llm import simple_completion
+from jyske_mcp.storage import Storage, SessionExpiredError
 
 # ── logging ───────────────────────────────────────────────────────────────────
 

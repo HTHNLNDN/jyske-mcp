@@ -1,6 +1,6 @@
 """Enable Banking consent bootstrap — start/complete OAuth-style authorization.
 
-Reuses lib.auth for JWT signing; this module only builds/parses the two
+Reuses jyske_mcp.auth for JWT signing; this module only builds/parses the two
 Enable Banking HTTP calls needed to (re-)establish a session. Called from
 app.py's /consent/* routes and from setup_consent.py.
 """
@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
-from lib.auth import auth_headers, BASE_URL, REDIRECT_URL
+from jyske_mcp.auth import auth_headers, BASE_URL, REDIRECT_URL
 
 log = logging.getLogger("consent")
 

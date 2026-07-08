@@ -1,9 +1,9 @@
 """
 Curated model catalog loader. The catalog itself lives in
-lib/curated_models.json (a data file, not hardcoded Python, so it's cheap to
-update as providers ship new models — see
-research/briefs/litellm-model-identifiers-2026-07-05.md for the sourcing/
-caveats on the exact id strings).
+jyske_mcp/data/curated_models.json (a data file, not hardcoded Python, so it's
+cheap to update as providers ship new models — see
+.agent/research/briefs/litellm-model-identifiers-2026-07-05.md for the
+sourcing/caveats on the exact id strings).
 
 Read once and cached at module level; nothing here talks to Enable Banking
 or any LLM provider.
@@ -12,7 +12,7 @@ or any LLM provider.
 import json
 from pathlib import Path
 
-_CATALOG_FILE = Path(__file__).resolve().parent / "curated_models.json"
+_CATALOG_FILE = Path(__file__).resolve().parent / "data" / "curated_models.json"
 
 _catalog: dict | None = None
 

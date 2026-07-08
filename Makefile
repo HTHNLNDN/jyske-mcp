@@ -1,4 +1,9 @@
-.PHONY: dev build start sync migrate migration db-status db-history langfuse langfuse-stop test dedupe bench
+.PHONY: install dev build start sync migrate migration db-status db-history langfuse langfuse-stop test dedupe bench
+
+# One-time (and after pulling dependency changes): editable install of the
+# src/ package + runtime deps, into the active venv.
+install:
+	pip install -e . && pip install -r requirements.txt
 
 dev:
 	cd frontend && npm run dev
@@ -7,10 +12,10 @@ build:
 	cd frontend && npm run build
 
 start:
-	python app.py
+	python -m jyske_mcp.web.app
 
 sync:
-	python cron/scheduler.py
+	python -m jyske_mcp.jobs.scheduler
 
 migrate:
 	alembic upgrade head

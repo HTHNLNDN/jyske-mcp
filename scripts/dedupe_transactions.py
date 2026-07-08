@@ -2,8 +2,8 @@
 Standalone cleanup for the NULL-transaction_id dedup bug.
 
 BACKGROUND: transactions.transaction_id is TEXT UNIQUE, and
-lib/storage.py's store_transaction() upserts via
-ON CONFLICT(transaction_id) DO UPDATE. Before the fix in lib/storage.py,
+jyske_mcp/storage.py's store_transaction() upserts via
+ON CONFLICT(transaction_id) DO UPDATE. Before the fix in jyske_mcp/storage.py,
 any Enable Banking transaction lacking both `transaction_id` and
 `entry_reference` was stored with a NULL transaction_id — and SQLite
 treats every NULL as distinct from every other NULL, so ON CONFLICT never
@@ -11,7 +11,7 @@ fired for these rows. Every overlapping sync re-inserted them, duplicating
 real spend.
 
 store_transaction() now assigns these rows a deterministic
-"synth:<sha256>" id (see lib.storage.synthetic_transaction_id) so future
+"synth:<sha256>" id (see jyske_mcp.storage.synthetic_transaction_id) so future
 syncs upsert correctly. This script is the one-time cleanup for rows that
 already accumulated duplicates under the old behavior — it is NOT an
 Alembic migration (no schema change) and only ever touches rows where
@@ -20,7 +20,7 @@ transaction_id IS NULL; rows with a real bank id are never read or written.
 For each NULL-transaction_id row:
   1. Compute its synthetic id from json.loads(raw_data) — the SAME raw
      transaction dict store_transaction hashes, via the same
-     lib.storage helpers, so ids computed here always agree with ids
+     jyske_mcp.storage helpers, so ids computed here always agree with ids
      future syncs will compute. (Never hashed from the typed `amount`
      column — see synthetic_transaction_id()'s docstring for why that
      would silently reintroduce duplication.)
@@ -49,13 +49,9 @@ re-running (in either mode) finds nothing to do.
 import argparse
 import json
 import sqlite3
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from lib.config import DB_FILE
-from lib.storage import synthetic_transaction_id
+from jyske_mcp.config import DB_FILE
+from jyske_mcp.storage import synthetic_transaction_id
 
 
 def main() -> None:

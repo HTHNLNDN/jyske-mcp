@@ -1,5 +1,5 @@
 """
-Tests for the SCHEDULER_SECRET auth guard on cron/scheduler.py's internal
+Tests for the SCHEDULER_SECRET auth guard on jyske_mcp/jobs/scheduler.py's internal
 FastAPI routes (/sync/trigger, /tips/trigger, /sync/status).
 
 Uses a plain TestClient(sched.app) — NOT the `with TestClient(...) as client`
@@ -16,8 +16,8 @@ sync/tips/status internals (covered elsewhere).
 import pytest
 from fastapi.testclient import TestClient
 
-import cron.scheduler as sched
-import lib.storage
+import jyske_mcp.jobs.scheduler as sched
+import jyske_mcp.storage
 
 client = TestClient(sched.app)
 
@@ -33,7 +33,7 @@ def _patch_business_logic(monkeypatch):
     """Isolate the auth dependency from the route bodies it guards."""
     monkeypatch.setattr(sched, "run_sync", lambda: None)
     monkeypatch.setattr(sched, "run_tips", lambda: None)
-    monkeypatch.setattr(lib.storage.Storage, "get_last_sync", lambda self: None)
+    monkeypatch.setattr(jyske_mcp.storage.Storage, "get_last_sync", lambda self: None)
 
 
 def _call(method, path, headers=None):

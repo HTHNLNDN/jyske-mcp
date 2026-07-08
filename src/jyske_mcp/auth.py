@@ -2,7 +2,9 @@ import jwt, time, uuid, os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+from jyske_mcp.config import ENV_FILE
+
+load_dotenv(ENV_FILE)
 
 APP_ID = os.environ["ENABLE_BANKING_APP_ID"]
 PRIVATE_KEY = Path(os.environ["ENABLE_BANKING_PRIVATE_KEY_PATH"]).expanduser().read_text()

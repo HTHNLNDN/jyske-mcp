@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-_CATEGORIES_FILE = Path(__file__).parent.parent / "data" / "categories.json"
-_MCC_CODES_FILE = Path(__file__).parent.parent / "data" / "mcc_codes.json"
+_CATEGORIES_FILE = Path(__file__).parent / "data" / "categories.json"
+_MCC_CODES_FILE = Path(__file__).parent / "data" / "mcc_codes.json"
 
 # Flat map: mcc_code -> (top, mid, leaf)  built once at import time
 _mcc_index: dict[str, tuple[str, str, str]] = {}

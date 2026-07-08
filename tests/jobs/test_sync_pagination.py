@@ -1,6 +1,6 @@
 """
 First pytest suite for the repo — covers the Enable Banking transaction
-pagination fix in cron/sync.py.
+pagination fix in jyske_mcp/jobs/sync.py.
 
 Contract under test (research/briefs/enable-banking-transactions-pagination-2026-07-07.md):
   - the next-page token is a top-level string field `continuation_key`
@@ -11,7 +11,7 @@ Contract under test (research/briefs/enable-banking-transactions-pagination-2026
 """
 from unittest.mock import MagicMock
 
-import cron.sync as sync
+import jyske_mcp.jobs.sync as sync
 
 
 def _fake_response(*, transactions=None, continuation_key=None, status_code=200):

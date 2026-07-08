@@ -1,6 +1,6 @@
 """
 Standalone benchmark for the per-account batched-insert fix in
-lib/storage.py (Storage.store_transaction / store_transactions_batch).
+jyske_mcp/storage.py (Storage.store_transaction / store_transactions_batch).
 
 NOT a pytest test — run directly:
 
@@ -26,16 +26,13 @@ warming the page cache for the other.
 import argparse
 import shutil
 import sqlite3
-import sys
 import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import lib.config as config_module
-import lib.storage as storage_module
-from lib.storage import Storage
+import jyske_mcp.config as config_module
+import jyske_mcp.storage as storage_module
+from jyske_mcp.storage import Storage
 
 _TRANSACTIONS_DDL = """
     CREATE TABLE transactions (

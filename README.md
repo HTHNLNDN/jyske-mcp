@@ -10,9 +10,10 @@ Enable Banking handles the Open Banking consent flow and proxies requests to Jys
 
 1. Create an application at [enablebanking.com](https://enablebanking.com) and download your RSA private key
 2. Copy `.env.example` to `.env` and fill in your `ENABLE_BANKING_APP_ID`, `ENABLE_BANKING_PRIVATE_KEY_PATH`, and `ENABLE_BANKING_REDIRECT_URL`
-3. Run `python setup_consent.py` and follow the browser flow to authorize access to your Jyske Bank account
-4. Add the server to your Claude MCP config (see below)
-5. Copy the contents of `SYSTEM_PROMPT.md` as your Claude system prompt
+3. Run `make install` (editable install of the `src/` package + dependencies, inside your venv)
+4. Run `python scripts/setup_consent.py` and follow the browser flow to authorize access to your Jyske Bank account
+5. Add the server to your Claude MCP config (see below)
+6. Copy the contents of [`src/jyske_mcp/prompts/system_prompt.md`](src/jyske_mcp/prompts/system_prompt.md) as your Claude system prompt
 
 ### MCP config
 
@@ -20,8 +21,8 @@ Enable Banking handles the Open Banking consent flow and proxies requests to Jys
 {
   "mcpServers": {
     "jyske-bank": {
-      "command": "python",
-      "args": ["/path/to/jyske-mcp/server.py"]
+      "command": "/path/to/jyske-mcp/.venv/bin/python",
+      "args": ["-m", "jyske_mcp.mcp.server"]
     }
   }
 }
@@ -40,7 +41,7 @@ Enable Banking handles the Open Banking consent flow and proxies requests to Jys
 
 ## Web app
 
-A PWA finance companion — Vue 3 + Vite frontend in [`frontend/`](frontend/), served by the FastAPI app in [`app.py`](app.py). PIN-gated and installable on iPhone via "Add to Home Screen".
+A PWA finance companion — Vue 3 + Vite frontend in [`frontend/`](frontend/), served by the FastAPI app in [`src/jyske_mcp/web/app.py`](src/jyske_mcp/web/app.py). PIN-gated and installable on iPhone via "Add to Home Screen".
 
 **During development** run two terminals:
 
@@ -60,7 +61,7 @@ make start   # FastAPI serves the built app at http://localhost:8080
 
 Then open **http://localhost:8080** and install via "Add to Home Screen".
 
-`make sync` runs the daily transaction sync scheduler ([`cron/scheduler.py`](cron/scheduler.py)).
+`make sync` runs the daily transaction sync scheduler ([`src/jyske_mcp/jobs/scheduler.py`](src/jyske_mcp/jobs/scheduler.py)).
 
 ---
 

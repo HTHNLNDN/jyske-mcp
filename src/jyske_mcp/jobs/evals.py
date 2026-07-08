@@ -1,6 +1,6 @@
 """
 Nightly LLM-as-judge evaluation of the previous day's /chat traces, scored
-back into Langfuse. Registered from cron/scheduler.py at 04:00, after the
+back into Langfuse. Registered from jyske_mcp/jobs/scheduler.py at 04:00, after the
 03:00 sync job.
 
 This only ever talks to the local .env config and Langfuse's own API for
@@ -12,18 +12,15 @@ or there are zero traces to score — never raises.
 """
 
 import json
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# project root on path so lib/ imports work regardless of CWD
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# load .env before lib/llm.py reads os.environ at import time
+# load .env before jyske_mcp/llm.py reads os.environ at import time
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+from jyske_mcp.config import ENV_FILE
+load_dotenv(ENV_FILE)
 
-# Reuse the exact same log file/format as cron/sync.py so `Eval complete: ...`
+# Reuse the exact same log file/format as jyske_mcp/jobs/sync.py so `Eval complete: ...`
 # lines show up alongside sync's own summary lines.
 import logging
 
@@ -40,10 +37,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("evals")
 
-from lib.llm import get_langfuse, simple_completion
+from jyske_mcp.llm import get_langfuse, simple_completion
 
 # Cheap, fast model for judging — this is a background job, not the
-# user-facing chat model (mirrors cron/sync.py's _batch_categorize).
+# user-facing chat model (mirrors jyske_mcp/jobs/sync.py's _batch_categorize).
 JUDGE_MODEL = "claude-haiku-4-5-20251001"
 
 SCORE_NAMES = ("relevance", "brevity", "tool_precision", "on_topic")
@@ -75,7 +72,7 @@ def _extract_conversation(trace) -> tuple[str, list[dict], str]:
     TraceWithFullDetails.
 
     trace.input/trace.output are always None here — confirmed live.
-    chat_completion() (lib/llm.py) only ever sets input/output on each
+    chat_completion() (jyske_mcp/llm.py) only ever sets input/output on each
     per-iteration 'chat' GENERATION observation, never on the trace object
     itself, and that was already true before the SDK downgrade; it just
     never surfaced before because trace ingestion silently 404'd against
@@ -84,7 +81,7 @@ def _extract_conversation(trace) -> tuple[str, list[dict], str]:
     observation's output holds the final assistant reply (a request may
     run several tool-calling iterations, each its own GENERATION).
     trace.observations includes one SPAN per tool call (see start_tool_span
-    in lib/llm.py; classic Langfuse 2.x has no distinct 'tool' observation
+    in jyske_mcp/llm.py; classic Langfuse 2.x has no distinct 'tool' observation
     type like the OTel-based v4 SDK had, so a plain SPAN is the marker —
     this codebase only ever creates spans for tool calls).
     Falls back to empty values on unexpected shapes — a judge run on partial

@@ -1,8 +1,8 @@
 """
 Single module for all LLM calls. Model/API-key selection is per-agent and
-DB-configured (see lib/storage.py's agents/provider_keys tables and
+DB-configured (see jyske_mcp/storage.py's agents/provider_keys tables and
 resolve_agent_llm() below) rather than a global env var — the one exception
-is cron/sync.py's merchant categorization and cron/evals.py's JUDGE_MODEL,
+is jyske_mcp/jobs/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's JUDGE_MODEL,
 which are out of scope for that and keep passing an explicit bare model
 string, relying on ANTHROPIC_API_KEY from the environment exactly as before.
 
@@ -24,7 +24,7 @@ from typing import Any, Generator, NamedTuple
 import litellm
 from langfuse import Langfuse
 
-from lib.storage import Storage
+from jyske_mcp.storage import Storage
 
 litellm.drop_params = True  # silently ignore unsupported provider params
 
@@ -41,9 +41,9 @@ class AgentLLMConfig(NamedTuple):
 def resolve_agent_llm(agent_id: str) -> AgentLLMConfig:
     """
     Resolves an agent's configured model + the API key for that model's
-    provider, both DB-backed (see lib/storage.py). Raises
+    provider, both DB-backed (see jyske_mcp/storage.py). Raises
     LLMNotConfiguredError with a clear, user-facing message at every step
-    where configuration is missing — callers (app.py's /chat, cron/tips.py)
+    where configuration is missing — callers (app.py's /chat, jyske_mcp/jobs/tips.py)
     are expected to catch it and degrade gracefully rather than let it
     surface as a raw exception.
     """
@@ -193,7 +193,7 @@ def start_tool_span(trace_id: str | None, name: str, tool_input: Any):
     observation type in the classic API (only SPAN/GENERATION/EVENT) — this
     codebase only ever creates spans for tool calls, so a plain span is
     enough to tell them apart from generations when reading traces back
-    (see cron/evals.py). Returns None (a safe no-op handle for
+    (see jyske_mcp/jobs/evals.py). Returns None (a safe no-op handle for
     end_tool_span) when there's no trace_id or Langfuse is
     disabled/unconfigured.
     """
@@ -298,7 +298,7 @@ def stream_completion(messages: list, system: str, model: str, api_key: str) -> 
 def simple_completion(prompt: str, model: str, api_key: str | None = None) -> str:
     """
     api_key=None lets LiteLLM fall back to whatever's in the environment —
-    this is what cron/sync.py's merchant categorization and cron/evals.py's
+    this is what jyske_mcp/jobs/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's
     JUDGE_MODEL calls rely on (both explicitly out of scope for per-agent
     DB-configured keys; they keep passing a bare model string and reading
     ANTHROPIC_API_KEY from the environment exactly as before).

@@ -1,5 +1,5 @@
 # This file must never call the Enable Banking API directly.
-# All data comes from SQLite. See cron/sync.py for data fetching.
+# All data comes from SQLite. See jyske_mcp/jobs/sync.py for data fetching.
 
 import calendar
 import json
@@ -8,8 +8,8 @@ from collections import Counter
 from datetime import datetime, timezone, timedelta
 
 from mcp.server.fastmcp import FastMCP
-from lib.storage import Storage, SessionExpiredError
-from lib.categorizer import categorize, top_categories
+from jyske_mcp.storage import Storage, SessionExpiredError
+from jyske_mcp.categorizer import categorize, top_categories
 
 mcp = FastMCP("jyske-bank")
 storage = Storage()
@@ -184,7 +184,7 @@ def get_sync_status() -> str:
     if last is None:
         return (
             "No sync has been run yet. "
-            "Run 'python cron/sync.py' or start cron/scheduler.py to populate data."
+            "Run 'python jyske_mcp/jobs/sync.py' or start jyske_mcp/jobs/scheduler.py to populate data."
         )
 
     completed = datetime.fromtimestamp(last["completed_at"], tz=timezone.utc)
@@ -1013,7 +1013,7 @@ def confirm_recurring_status(merchant: str, status: str, currency: str = "DKK") 
 
 
 # ── tip of the day ───────────────────────────────────────────────────────────
-# Tips are generated nightly by cron/tips.py and persisted via
+# Tips are generated nightly by jyske_mcp/jobs/tips.py and persisted via
 # Storage.create_tip; these tools only ever read/update that row, never call
 # an LLM or Enable Banking themselves.
 

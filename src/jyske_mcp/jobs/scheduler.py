@@ -1,25 +1,22 @@
 import logging
 import os
 import secrets
-import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-# project root and cron/ dir on path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
-
+# load .env before jyske_mcp.auth (imported transitively below) reads
+# os.environ at import time
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+from jyske_mcp.config import ENV_FILE
+load_dotenv(ENV_FILE)
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from sync import run_sync
-from evals import run_evals
-from tips import run_tips
+from jyske_mcp.jobs.sync import run_sync
+from jyske_mcp.jobs.evals import run_evals
+from jyske_mcp.jobs.tips import run_tips
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,7 +87,7 @@ def trigger_tips():
 
 @app.get("/sync/status", dependencies=[Depends(require_scheduler_secret)])
 def sync_status():
-    from lib.storage import Storage
+    from jyske_mcp.storage import Storage
     last = Storage().get_last_sync()
     if last is None:
         return {"last_sync": None}

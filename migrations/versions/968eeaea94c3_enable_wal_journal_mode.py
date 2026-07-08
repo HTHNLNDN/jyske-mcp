@@ -27,7 +27,7 @@ def _set_journal_mode(mode: str) -> None:
 
     journal_mode=WAL is persisted in the database file header, not
     per-connection, so this is a one-time migration rather than something
-    _db() needs to set on every connect — lib/storage.py's _db() is
+    _db() needs to set on every connect — jyske_mcp/storage.py's _db() is
     intentionally left untouched.
     """
     bind = op.get_bind()
@@ -43,7 +43,7 @@ def _set_journal_mode(mode: str) -> None:
     if got is None or got.lower() != mode.lower():
         raise RuntimeError(
             f"journal_mode switch failed: wanted {mode!r}, DB reports {got!r}. "
-            "Stop app.py and cron/scheduler.py, then retry."
+            "Stop app.py and jyske_mcp/jobs/scheduler.py, then retry."
         )
 
 

@@ -1,0 +1,23 @@
+# Packaging only — runtime dependencies stay in requirements.txt for now.
+# The package is meant to be installed editable (pip install -e ., or
+# `make install`): jyske_mcp.config.ROOT_DIR resolves to the repo checkout,
+# where alembic.ini, static/, and .env live.
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jyske-mcp"
+version = "0.1.0"
+description = "Personal finance companion — FastAPI PWA backend + MCP server over Enable Banking data"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+jyske_mcp = ["data/*.json", "prompts/*.md"]

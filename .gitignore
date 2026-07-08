@@ -5,13 +5,14 @@
 session.json
 __pycache__/
 .venv/
+*.egg-info/
+.pytest_cache/
 .claude/*
 frontend/node_modules/
 static/dist/
-claude.md
-research/*
+.agent/
 .playwright-mcp/*
-ideas/*
-data/*.bak*
-data/*.db
-data/*.sqlite
+# Never let data/backup files near a commit (pre-commit blocks these too).
+*.bak*
+*.db
+*.sqlite*
