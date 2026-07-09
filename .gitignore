@@ -16,3 +16,4 @@ static/dist/
 *.bak*
 *.db
 *.sqlite*
+CLAUDE.md
