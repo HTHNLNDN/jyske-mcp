@@ -4,16 +4,17 @@ An MCP server that connects Claude to your Jyske Bank account via the [Enable Ba
 
 ## How it works
 
-Enable Banking handles the Open Banking consent flow and proxies requests to Jyske Bank. The MCP server exposes four tools to Claude, which caches responses locally (6-hour TTL, matching the 4-calls/day API limit) and builds a persistent merchant categorization database so you only have to classify a merchant once.
+Enable Banking handles the Open Banking consent flow and proxies requests to Jyske Bank. A scheduled sync job pulls accounts/balances/transactions into a local SQLite cache; the MCP server never talks to Enable Banking itself — it only reads from that cache (see [`src/jyske_mcp/mcp/server.py`](src/jyske_mcp/mcp/server.py)). A persistent merchant categorization database means you only have to classify a merchant once. A companion PWA (Vue 3 + Vite, served by the same FastAPI app) gives a chat UI on top of the same data.
 
 ## Setup
 
-1. Create an application at [enablebanking.com](https://enablebanking.com) and download your RSA private key
-2. Copy `.env.example` to `.env` and fill in your `ENABLE_BANKING_APP_ID`, `ENABLE_BANKING_PRIVATE_KEY_PATH`, and `ENABLE_BANKING_REDIRECT_URL`
-3. Run `make install` (editable install of the `src/` package + dependencies, inside your venv)
-4. Run `python scripts/setup_consent.py` and follow the browser flow to authorize access to your Jyske Bank account
-5. Add the server to your Claude MCP config (see below)
-6. Copy the contents of [`src/jyske_mcp/prompts/system_prompt.md`](src/jyske_mcp/prompts/system_prompt.md) as your Claude system prompt
+1. Create an application at [enablebanking.com](https://enablebanking.com) and download your RSA private key.
+2. Copy `.env.example` to `.env` and fill in `ENABLE_BANKING_APP_ID`, `ENABLE_BANKING_PRIVATE_KEY_PATH`, `ENABLE_BANKING_REDIRECT_URL`, `APP_PIN`, `SESSION_SECRET`, and `SCHEDULER_SECRET` (see [Environment variables](#environment-variables) below).
+3. Run `make install` (editable install of the `src/` package + runtime dependencies, inside your venv). Contributors should use `pip install -r requirements-dev.txt` instead, which adds `pre-commit`.
+4. Run `make migrate` to create the local SQLite schema (`~/.config/mcp-bank/cache.db`) — the app does not create tables itself, so this has to happen before first run.
+5. Run `python scripts/setup_consent.py` and follow the browser flow to authorize access to your Jyske Bank account.
+6. Add the server to your Claude MCP config (see below).
+7. Copy the contents of [`src/jyske_mcp/prompts/system_prompt.md`](src/jyske_mcp/prompts/system_prompt.md) as your Claude system prompt.
 
 ### MCP config
 
@@ -28,14 +29,82 @@ Enable Banking handles the Open Banking consent flow and proxies requests to Jys
 }
 ```
 
+### Environment variables
+
+Required, from `.env.example`:
+
+| Variable | Purpose |
+|---|---|
+| `ENABLE_BANKING_APP_ID`, `ENABLE_BANKING_PRIVATE_KEY_PATH`, `ENABLE_BANKING_REDIRECT_URL` | Enable Banking application credentials and consent callback URL |
+| `APP_PIN` | PIN gating the web app |
+| `SESSION_SECRET` | Signs web app session cookies |
+| `SCHEDULER_SECRET` | Shared secret between the FastAPI app and the internal scheduler service (`127.0.0.1:8081`). If unset, the scheduler fails closed and rejects all requests — both the manual "sync now" button and the nightly cron sync stop working until it's set. |
+| `LLM_MODEL`, and the matching provider key (e.g. `ANTHROPIC_API_KEY`) | Chat model, via LiteLLM |
+
+Optional:
+
+| Variable | Purpose |
+|---|---|
+| `LLM_FALLBACK_MODEL` | Fallback model if the primary LLM call fails |
+| `APP_HOST`, `APP_PORT` | Web server bind address/port (default `0.0.0.0:8080`) |
+| `LANGFUSE_ENABLED`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Optional observability via a self-hosted Langfuse instance (see [Web app](#web-app)) |
+
 ## Tools
 
+The MCP server exposes 23 tools, all reading from the local SQLite cache (never calling Enable Banking directly).
+
+**Accounts & balances**
+
 | Tool | What it does |
-|------|-------------|
+|---|---|
 | `list_accounts` | Lists all accounts in the active consent session |
-| `get_balances` | Gets current balances — leave `account_uid` empty for all accounts |
-| `get_transactions` | Gets transactions for a date range (defaults to last 30 days) |
-| `categorize_transaction` | Two-step categorization: MCC lookup first, then LLM fallback |
+| `get_balances` | Gets cached balances — leave `account_uid` empty for all accounts |
+| `get_transactions` | Gets categorized transactions for a date range (defaults to last 30 days) |
+| `get_sync_status` | Reports when data was last synced and flags stale data |
+
+**Spending & budgets**
+
+| Tool | What it does |
+|---|---|
+| `categorize_transaction` | Two-step categorization: merchant/MCC lookup first, then LLM fallback |
+| `get_spending` | Sums spending by category/month, grouped as requested; totals are per-currency |
+| `compare_spending` | Compares spending in one month against a baseline month, with proration for in-progress months |
+| `set_budget` | Sets a spending budget for a category |
+| `get_budget_status` | Gets current budget status against limits (DKK-primary) |
+| `get_overspend_patterns` | Flags categories overspent 3+ consecutive months |
+
+**Goals**
+
+| Tool | What it does |
+|---|---|
+| `get_goals` | Lists active savings/spending goals with progress |
+| `set_goal` | Creates a new goal (target amount, purpose, deadline) |
+| `update_goal_progress` | Updates the current amount saved toward a goal |
+| `goal_pace` | Computes whether a goal is on track and the pace needed to hit its deadline |
+
+**Recurring charges**
+
+| Tool | What it does |
+|---|---|
+| `recurring_charges` | Detects subscriptions and frequent merchants from transaction history, flagging any that have gone quiet |
+| `confirm_recurring_status` | Records the user's answer on whether a flagged recurring charge is still active |
+
+**Memory & onboarding**
+
+| Tool | What it does |
+|---|---|
+| `get_memory` | Returns the stored user profile and recent session summaries — call at session start |
+| `update_memory` | Saves a session summary and any profile updates — call at session end |
+| `get_onboarding_status` | Checks whether budget onboarding is complete, and current stage if not |
+| `set_onboarding_stage` | Records progress through budget onboarding, one stage at a time |
+| `complete_onboarding` | Marks budget onboarding complete |
+
+**Tip of the day**
+
+| Tool | What it does |
+|---|---|
+| `get_current_tip` | Returns today's financial tip, generated overnight by the scheduler |
+| `submit_tip_feedback` | Records the user's accept/reject reaction to a tip, with reasoning |
 
 ---
 
@@ -61,7 +130,16 @@ make start   # FastAPI serves the built app at http://localhost:8080
 
 Then open **http://localhost:8080** and install via "Add to Home Screen".
 
-`make sync` runs the daily transaction sync scheduler ([`src/jyske_mcp/jobs/scheduler.py`](src/jyske_mcp/jobs/scheduler.py)).
+`make sync` runs the scheduler service ([`src/jyske_mcp/jobs/scheduler.py`](src/jyske_mcp/jobs/scheduler.py)) on `127.0.0.1:8081`. It's the single owner of syncing — the web app's manual "sync now" button calls into it over an authenticated internal endpoint rather than syncing itself, and it also runs the following on a schedule:
+
+- daily transaction sync — 03:00
+- nightly evals — 04:00
+- nightly tip-of-the-day generation — 04:30
+- a sync-freshness check — every 6 hours
+
+Requires `SCHEDULER_SECRET` to be set (see [Environment variables](#environment-variables)) — without it, the scheduler rejects every request, including the manual sync button.
+
+**Optional observability:** `make langfuse` starts a self-hosted [Langfuse](https://langfuse.com) instance via [`docker/langfuse/`](docker/langfuse/) at `http://localhost:3000`, for tracing chat/LLM calls. It's off unless `LANGFUSE_ENABLED=true` and the Langfuse keys are set; the compose setup uses its own gitignored env file under `docker/langfuse/`.
 
 ---
 
@@ -69,7 +147,7 @@ Then open **http://localhost:8080** and install via "Add to Home Screen".
 
 The local SQLite cache (`~/.config/mcp-bank/cache.db`) is managed with [Alembic](https://alembic.sqlalchemy.org/). The app no longer creates tables itself — if the schema is missing or out of date, it logs a warning on startup instead of auto-migrating.
 
-**First-time setup** — after cloning, create the schema before running the app:
+**First-time setup** — after cloning, create the schema before running the app (also step 4 above):
 
 ```bash
 make migrate
@@ -90,6 +168,12 @@ make migration name="describe_the_change"
 Then edit the generated file in `migrations/versions/` to add the `upgrade()`/`downgrade()` SQL.
 
 Other useful targets: `make db-status` (current revision) and `make db-history` (full migration history).
+
+---
+
+## Tests
+
+`make test` (or `pytest`) runs the test suite under [`tests/`](tests/) — covers categorization/recurring-charge classification, spending aggregation and proration, goal pacing, mixed-currency handling, and config security.
 
 ---
 

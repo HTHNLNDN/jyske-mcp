@@ -1,12 +1,9 @@
-version: "3.9"
 services:
   postgres:
       image: postgres:15
       restart: unless-stopped
-      environment:
-        POSTGRES_USER: langfuse
-        POSTGRES_PASSWORD: langfuse
-        POSTGRES_DB: langfuse
+      env_file:
+        - .env
       volumes:
         - postgres_data:/var/lib/postgresql/data
   langfuse:
@@ -15,11 +12,10 @@ services:
     depends_on:
       - postgres
     ports:
-      - "3000:3000"
+      - "${LANGFUSE_BIND_HOST:-127.0.0.1}:3000:3000"
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
-      NEXTAUTH_SECRET: "$(openssl rand -hex 32)"
-      SALT: "$(openssl rand -hex 32)"
       NEXTAUTH_URL: http://localhost:3000
       TELEMETRY_ENABLED: "false"
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"

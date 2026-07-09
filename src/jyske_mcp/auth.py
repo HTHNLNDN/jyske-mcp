@@ -10,6 +10,7 @@ APP_ID = os.environ["ENABLE_BANKING_APP_ID"]
 PRIVATE_KEY = Path(os.environ["ENABLE_BANKING_PRIVATE_KEY_PATH"]).expanduser().read_text()
 BASE_URL = "https://api.enablebanking.com"
 REDIRECT_URL = os.environ["ENABLE_BANKING_REDIRECT_URL"]
+HTTP_TIMEOUT = (5, 30)  # (connect, read) seconds
 
 
 def make_token():

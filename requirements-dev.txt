@@ -1,0 +1,4 @@
+# Development dependencies — runtime set plus local tooling.
+# Install with: pip install -r requirements-dev.txt
+-r requirements.txt
+pre-commit>=4.6.0  # local git hook framework; see .pre-commit-config.yaml

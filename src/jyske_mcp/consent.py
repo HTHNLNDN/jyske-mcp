@@ -5,13 +5,13 @@ Enable Banking HTTP calls needed to (re-)establish a session. Called from
 app.py's /consent/* routes and from setup_consent.py.
 """
 import logging
-import os
 import uuid
 from datetime import datetime, timezone, timedelta
 
 import requests
 
-from jyske_mcp.auth import auth_headers, BASE_URL, REDIRECT_URL
+from jyske_mcp import scheduler_client
+from jyske_mcp.auth import auth_headers, BASE_URL, HTTP_TIMEOUT, REDIRECT_URL
 
 log = logging.getLogger("consent")
 
@@ -21,7 +21,6 @@ ASPSP_NAME = "Jyske Bank"
 ASPSP_COUNTRY = "DK"
 
 _PENDING_KEY = "consent:pending"
-_SYNC_TRIGGER_URL = "http://localhost:8081/sync/trigger"
 
 
 def start_authorization(storage) -> dict:
@@ -36,7 +35,7 @@ def start_authorization(storage) -> dict:
         "redirect_url": REDIRECT_URL,
         "psu_type": "personal",
     }
-    r = requests.post(f"{BASE_URL}/auth", json=body, headers=auth_headers())
+    r = requests.post(f"{BASE_URL}/auth", json=body, headers=auth_headers(), timeout=HTTP_TIMEOUT)
     r.raise_for_status()
     auth_url = r.json()["url"]
 
@@ -57,7 +56,7 @@ def complete_authorization(storage, code: str, expected_state: str) -> dict:
 
     old = storage.read_session_unchecked()
 
-    r = requests.post(f"{BASE_URL}/sessions", json={"code": code}, headers=auth_headers())
+    r = requests.post(f"{BASE_URL}/sessions", json={"code": code}, headers=auth_headers(), timeout=HTTP_TIMEOUT)
     r.raise_for_status()
     session = r.json()
 
@@ -108,9 +107,8 @@ def complete_authorization(storage, code: str, expected_state: str) -> dict:
     storage.cache_set(_PENDING_KEY, None)
 
     # best-effort kick of a sync — the daily cron catches up regardless
-    secret = os.environ.get("SCHEDULER_SECRET", "")
     try:
-        resp = requests.post(_SYNC_TRIGGER_URL, headers={"X-Scheduler-Secret": secret}, timeout=2)
+        resp = scheduler_client.trigger_sync(None, timeout=2)
         if resp.status_code >= 300:
             log.warning("sync trigger returned %s: %s", resp.status_code, resp.text[:200])
     except Exception as e:

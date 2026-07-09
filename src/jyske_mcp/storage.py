@@ -11,6 +11,12 @@ _SESSION_FILE = SESSION_FILE
 _CACHE_DB = DB_FILE
 _CACHE_TTL = 6 * 3600  # aligns with 4-calls/day rate limit
 
+# The only currency get_budget_status()'s spent/percent/status figures are
+# computed against — budgets are set in DKK and there's no exchange rate, so
+# non-DKK spend is surfaced separately (other_currency_amounts) rather than
+# blended in. See the currency de-blending fix this constant is part of.
+PRIMARY_CURRENCY = "DKK"
+
 
 class SessionExpiredError(Exception):
     pass
@@ -780,11 +786,19 @@ class Storage:
         # that added `direction` and backfilled categories), so this can go
         # through the same aggregation path as get_spending/compare_spending
         # instead of a divergent raw_data-parsing loop.
+        #
+        # Budgets are set (and scored) in PRIMARY_CURRENCY only — there's no
+        # exchange rate, so non-DKK spend must never be blended into `spent`.
+        # Keep the fold per-currency and pick out PRIMARY_CURRENCY below;
+        # anything else is surfaced separately as other_currency_amounts.
         spending_rows = self.sum_spending(month_start, today, group_by="category")
-        spending: dict[str, float] = {}
+        spending: dict[str, dict[str, float]] = {}   # cat -> {currency: amount}
         for row in spending_rows:
             cat = row["key"] or "Other"
-            spending[cat] = spending.get(cat, 0.0) + row["amount"]
+            spending.setdefault(cat, {})
+            spending[cat][row["currency"]] = round(
+                spending[cat].get(row["currency"], 0.0) + row["amount"], 2
+            )
 
         conn = self._db()
         budget_rows = conn.execute(
@@ -796,7 +810,27 @@ class Storage:
 
         result = []
         for cat_top, cat_mid, limit_amount, period in budget_rows:
-            spent = round(spending.get(cat_top, 0.0), 2)
+            if cat_mid:
+                # Mid-level budget: don't reuse the top-level aggregate above
+                # (that would blend in every other sub-category under the
+                # same top category). Query mid-level spend scoped to this
+                # top category only, so a same-named mid under a different
+                # top category can never leak in.
+                mid_rows = self.sum_spending(
+                    month_start, today, category_top=cat_top, group_by="mid"
+                )
+                by_ccy: dict[str, float] = {}
+                for row in mid_rows:
+                    if row["key"] == cat_mid:
+                        by_ccy[row["currency"]] = round(
+                            by_ccy.get(row["currency"], 0.0) + row["amount"], 2
+                        )
+            else:
+                by_ccy = spending.get(cat_top, {})
+
+            spent = round(by_ccy.get(PRIMARY_CURRENCY, 0.0), 2)
+            others = {c: a for c, a in by_ccy.items() if c != PRIMARY_CURRENCY and a}
+
             percent = round((spent / limit_amount) * 100, 1) if limit_amount > 0 else 0.0
             if percent < 80:
                 status = "on_track"
@@ -804,7 +838,7 @@ class Storage:
                 status = "warning"
             else:
                 status = "over"
-            result.append({
+            entry = {
                 "category":     cat_top,
                 "category_mid": cat_mid,
                 "spent":        spent,
@@ -812,7 +846,10 @@ class Storage:
                 "period":       period,
                 "percent":      percent,
                 "status":       status,
-            })
+            }
+            if others:
+                entry["other_currency_amounts"] = others
+            result.append(entry)
         return result
 
     # ── goals ────────────────────────────────────────────────────────────────
@@ -1301,10 +1338,12 @@ class Storage:
     def _db(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         os.chmod(CONFIG_DIR, 0o700)
-        is_new = not _CACHE_DB.exists()
         conn = sqlite3.connect(str(_CACHE_DB))
-        if is_new:
-            os.chmod(_CACHE_DB, 0o600)
+        # Unconditional, not just on first creation — a prior run could have
+        # left cache.db with looser permissions (e.g. restored from a backup,
+        # or created before this hardening existed), so re-assert 0600 on
+        # every connection rather than gating on is_new.
+        os.chmod(_CACHE_DB, 0o600)
         return conn
 
 

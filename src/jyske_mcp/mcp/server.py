@@ -298,7 +298,12 @@ def set_budget(category: str, limit_amount: float, period: str = "monthly") -> s
 
 @mcp.tool()
 def get_budget_status() -> str:
-    """Get current budget status. Always call this as part of the opening brief."""
+    """
+    Get current budget status. Always call this as part of the opening brief.
+    spent, percent, and status are DKK only. If other_currency_amounts is
+    present, the category also has non-DKK spend not reflected in
+    spent/percent; report it separately, never add it in.
+    """
     rows = storage.get_budget_status()
     if not rows:
         return "No budgets set. Use set_budget to create one."
@@ -409,6 +414,54 @@ def _prev_month(month: str) -> str:
     return f"{year:04d}-{mon - 1:02d}"
 
 
+def _compute_proration(month: str, baseline_month: str, now: datetime) -> dict:
+    """
+    Pure proration math for compare_spending: is `month` still the
+    in-progress current calendar month relative to `now`, and if so, what
+    date window should `baseline_month` be truncated to so it covers the
+    same number of elapsed days (an apples-to-apples comparison against a
+    full prior calendar month), plus whether so little of the month has
+    elapsed that the comparison should be flagged low_confidence.
+
+    No I/O — the caller is responsible for actually summing spend over
+    baseline_prorated_from/to (see compare_spending).
+
+    Returns a dict:
+      in_progress             bool
+      pct_elapsed             float | None  (None when not in_progress)
+      low_confidence          bool          (False when not in_progress)
+      baseline_prorated_from  str | None
+      baseline_prorated_to    str | None
+    """
+    in_progress = month == now.strftime("%Y-%m")
+    if not in_progress:
+        return {
+            "in_progress":            False,
+            "pct_elapsed":            None,
+            "low_confidence":         False,
+            "baseline_prorated_from": None,
+            "baseline_prorated_to":   None,
+        }
+
+    year, mon = int(month[:4]), int(month[5:7])
+    days_in_month = calendar.monthrange(year, mon)[1]
+    day_of_month = now.day
+    pct_elapsed = day_of_month / days_in_month
+    low_confidence = pct_elapsed < 0.25
+
+    b_year, b_mon = int(baseline_month[:4]), int(baseline_month[5:7])
+    baseline_last_day = calendar.monthrange(b_year, b_mon)[1]
+    prorate_day = min(day_of_month, baseline_last_day)
+
+    return {
+        "in_progress":            True,
+        "pct_elapsed":            pct_elapsed,
+        "low_confidence":         low_confidence,
+        "baseline_prorated_from": f"{baseline_month}-01",
+        "baseline_prorated_to":   f"{baseline_month}-{prorate_day:02d}",
+    }
+
+
 @mcp.tool()
 def get_spending(
     date_from: str = "",
@@ -423,6 +476,8 @@ def get_spending(
     group_by: "category" (default), "mid", "month", or "none".
     category, if given, must be a top-level category name and narrows the sum
     to that category only.
+    total is a map of currency -> amount (e.g. {"DKK": 500.0}), never a
+    single number — no currency conversion. Report each currency separately.
     """
     err = _validate_category(category)
     if err:
@@ -445,7 +500,12 @@ def get_spending(
     except ValueError as e:
         return str(e)
 
-    total = round(sum(r["amount"] for r in rows), 2)
+    # Never blend currencies into a single number — fold per currency instead
+    # (today every account is DKK, but this stops a future non-DKK account
+    # from silently corrupting the total; no exchange rate is applied).
+    total: dict[str, float] = {}
+    for r in rows:
+        total[r["currency"]] = round(total.get(r["currency"], 0.0) + r["amount"], 2)
     count = sum(r["count"] for r in rows)
     return json.dumps({
         "date_from": date_from,
@@ -464,6 +524,9 @@ def compare_spending(month: str = "", baseline_month: str = "", category: str = 
     Defaults month to the current calendar month and baseline_month to the
     month immediately before it. If `category` is given (top-level category),
     narrows to that category and breaks down by mid-category instead.
+    totals is keyed by currency; each currency has its own current/baseline/
+    delta/pct_change (+ baseline_prorated/low_confidence for an in-progress
+    month). Never combine currencies.
     """
     err = _validate_category(category)
     if err:
@@ -500,24 +563,13 @@ def compare_spending(month: str = "", baseline_month: str = "", category: str = 
     # apples, and flag low_confidence when very little of the month has
     # elapsed. This only applies to the current-month case; two completed
     # past months are compared exactly as before.
-    in_progress = month == now.strftime("%Y-%m")
+    proration = _compute_proration(month, baseline_month, now)
+    in_progress = proration["in_progress"]
+    low_confidence = proration["low_confidence"]
     base_prorated_idx: dict[tuple, float] = {}
-    low_confidence = False
     if in_progress:
-        year, mon = int(month[:4]), int(month[5:7])
-        days_in_month = calendar.monthrange(year, mon)[1]
-        day_of_month = now.day
-        pct_elapsed = day_of_month / days_in_month
-        low_confidence = pct_elapsed < 0.25
-
-        b_year, b_mon = int(baseline_month[:4]), int(baseline_month[5:7])
-        baseline_last_day = calendar.monthrange(b_year, b_mon)[1]
-        prorate_day = min(day_of_month, baseline_last_day)
-        baseline_prorated_from = f"{baseline_month}-01"
-        baseline_prorated_to = f"{baseline_month}-{prorate_day:02d}"
-
         baseline_prorated_rows = storage.sum_spending(
-            baseline_prorated_from, baseline_prorated_to,
+            proration["baseline_prorated_from"], proration["baseline_prorated_to"],
             category_top=category or None, group_by=group_by,
         )
         base_prorated_idx = _index(baseline_prorated_rows)
@@ -544,22 +596,20 @@ def compare_spending(month: str = "", baseline_month: str = "", category: str = 
         breakdown.append(entry)
     breakdown.sort(key=lambda r: abs(r["delta"]), reverse=True)
 
-    total_current = round(sum(r["current"] for r in breakdown), 2)
-    total_baseline = round(sum(r["baseline"] for r in breakdown), 2)
-    total_delta = round(total_current - total_baseline, 2)
-    total_pct_change = round(total_delta / total_baseline * 100, 1) if total_baseline else None
-
-    totals = {
-        "current":    total_current,
-        "baseline":   total_baseline,
-        "delta":      total_delta,
-        "pct_change": total_pct_change,
-    }
-    if in_progress:
-        totals["baseline_prorated"] = round(
-            sum(r["baseline_prorated"] for r in breakdown), 2
-        )
-        totals["low_confidence"] = low_confidence
+    # Never blend currencies into a single total — fold per currency instead
+    # (no exchange rate is applied).
+    totals: dict[str, dict] = {}
+    for r in breakdown:
+        t = totals.setdefault(r["currency"], {"current": 0.0, "baseline": 0.0})
+        t["current"]  = round(t["current"]  + r["current"], 2)
+        t["baseline"] = round(t["baseline"] + r["baseline"], 2)
+        if in_progress:
+            t["baseline_prorated"] = round(t.get("baseline_prorated", 0.0) + r["baseline_prorated"], 2)
+    for t in totals.values():
+        t["delta"]      = round(t["current"] - t["baseline"], 2)
+        t["pct_change"] = round(t["delta"] / t["baseline"] * 100, 1) if t["baseline"] else None
+        if in_progress:
+            t["low_confidence"] = low_confidence
 
     return json.dumps({
         "month":          month,

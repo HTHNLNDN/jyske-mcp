@@ -11,19 +11,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+import requests
 import uvicorn
-import threading
 import time
 import json
 import os
 import logging
 from datetime import datetime, timezone
-from jyske_mcp.config import ENV_FILE, ROOT_DIR
-from jyske_mcp.storage import Storage
+from jyske_mcp.config import ENV_FILE, ROOT_DIR, CHAT_LOG_FILE, secure_config_files, secure_rotating_handler
+from jyske_mcp.storage import Storage, PRIMARY_CURRENCY
 from jyske_mcp.categorizer import category_tree
 from jyske_mcp import consent as consent_lib
+from jyske_mcp import scheduler_client
 from jyske_mcp.model_catalog import all_model_ids, load_catalog
-from jyske_mcp.jobs.sync import run_sync
 from jyske_mcp.llm import (
     chat_completion,
     resolve_agent_llm,
@@ -76,9 +76,6 @@ _lockout_until: float = 0.0
 MAX_ATTEMPTS = 3
 LOCKOUT_SECONDS = 60
 
-_sync_lock = threading.Lock()
-_sync_state = {"running": False, "error": None, "started_at": None}
-
 _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/jyske_mcp/
 _dir = str(ROOT_DIR)  # repo root — static/ and the frontend build live here, not in the package
 SYSTEM_PROMPT = open(os.path.join(_pkg_dir, "prompts", "system_prompt.md")).read()
@@ -89,18 +86,20 @@ DIST_INDEX = os.path.join(DIST_DIR, "index.html")
 DIST_ASSETS = os.path.join(DIST_DIR, "assets")
 
 def _setup_chat_log() -> logging.Logger:
-    log_dir = os.path.expanduser("~/.config/mcp-bank")
-    os.makedirs(log_dir, exist_ok=True)
     log = logging.getLogger("mcp_bank.chat")
     if not log.handlers:
-        h = logging.FileHandler(os.path.join(log_dir, "chat.log"))
-        h.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        h = secure_rotating_handler(
+            CHAT_LOG_FILE, "%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
         log.addHandler(h)
         log.setLevel(logging.DEBUG)
         log.propagate = False
     return log
 
 
+# Idempotent — chmods cache.db/session.json/chat.log/sync.log/.env to 0600 on
+# every process start, not just on first creation (see config.secure_config_files).
+secure_config_files()
 _chat_log = _setup_chat_log()
 
 TOOLS = [
@@ -825,12 +824,12 @@ def chat(req: ChatRequest):
 
     def generate():
         _chat_log.info("─── CHAT START ───────────────────────────────────────────")
-        _chat_log.info("USER: %.400s", req.message)
+        _chat_log.info("USER: <%d chars>", len(req.message))
 
         try:
             llm_cfg = resolve_agent_llm(req.agent_id)
         except LLMNotConfiguredError as e:
-            _chat_log.info("NOT CONFIGURED: %s", e)
+            _chat_log.info("NOT CONFIGURED: %s", type(e).__name__)
             yield f"data: [ERROR:NOT_CONFIGURED] {e}\n\n"
             return
 
@@ -901,7 +900,7 @@ def chat(req: ChatRequest):
 
                     reply_text = "".join(reply_chunks)
                     if reply_text:
-                        _chat_log.info("ASSISTANT[%d]: %.800s", iteration, reply_text)
+                        _chat_log.info("ASSISTANT[%d]: <%d chars>", iteration, len(reply_text))
 
                     end_generation(
                         generation,
@@ -940,19 +939,20 @@ def chat(req: ChatRequest):
                             args = json.loads(c["arguments"]) if c["arguments"] else {}
                         except json.JSONDecodeError:
                             args = {}
-                        args_str = json.dumps(args, ensure_ascii=False)
-                        _chat_log.info("  TOOL[%d] %s  %s", iteration, c["name"], args_str[:600])
+                        # Tool name only — never log arguments or results,
+                        # which can carry balances/IBANs/merchant detail.
+                        _chat_log.info("  TOOL[%d] %s", iteration, c["name"])
                         tool_span = start_tool_span(trace_id, c["name"], args)
                         result = _run_tool(c["name"], args)
                         end_tool_span(tool_span, result)
-                        _chat_log.info("  RESULT: %.600s", str(result))
+                        _chat_log.info("  RESULT: <%d chars>", len(str(result)))
                         messages.append({
                             "role": "tool",
                             "tool_call_id": c["id"],
                             "content": result,
                         })
         except Exception as e:
-            _chat_log.info("ERROR: %s", e)
+            _chat_log.info("ERROR: %s", type(e).__name__)
             yield f"data: [ERROR] {e}\n\n"
             return
         yield "data: [DONE]\n\n"
@@ -977,7 +977,7 @@ def feedback(req: FeedbackRequest):
                 comment=req.comment,
             )
         except Exception as e:
-            _chat_log.info("Langfuse feedback score failed: %s", e)
+            _chat_log.info("Langfuse feedback score failed: %s", type(e).__name__)
     return {"ok": True}
 
 
@@ -1021,6 +1021,12 @@ def budgets_breakdown(category: str):
     # sum_spending() aggregation path, just grouped by mid instead of top —
     # so `total` here always matches that category's `spent` on the status
     # endpoint.
+    #
+    # Mirrors get_budget_status()'s DKK-primary treatment: `spent`/`total`
+    # are PRIMARY_CURRENCY only (no exchange rate), non-DKK amounts are
+    # surfaced separately via other_currency_amounts (per row and overall)
+    # rather than blended in. `count` is just a line-item count, not a
+    # monetary amount, so it's safe to total across currencies as before.
     storage = Storage()
     date_from, date_to = storage.current_month_window()
     rows = storage.sum_spending(date_from, date_to, category_top=category, group_by="mid")
@@ -1028,20 +1034,27 @@ def budgets_breakdown(category: str):
     by_mid: dict[str | None, dict] = {}
     for row in rows:
         key = row["key"] or None
-        entry = by_mid.setdefault(key, {"spent": 0.0, "count": 0})
-        entry["spent"] += row["amount"]
+        entry = by_mid.setdefault(key, {"by_ccy": {}, "count": 0})
+        entry["by_ccy"][row["currency"]] = round(
+            entry["by_ccy"].get(row["currency"], 0.0) + row["amount"], 2
+        )
         entry["count"] += row["count"]
 
     breakdown = []
     uncategorized_entry = None
     for key, entry in by_mid.items():
+        by_ccy = entry["by_ccy"]
+        spent = round(by_ccy.get(PRIMARY_CURRENCY, 0.0), 2)
+        others = {c: a for c, a in by_ccy.items() if c != PRIMARY_CURRENCY and a}
         item = {
             "category_mid": key,
             "label":        key or "Uncategorized",
-            "spent":        round(entry["spent"], 2),
+            "spent":        spent,
             "count":        entry["count"],
             "uncategorized": key is None,
         }
+        if others:
+            item["other_currency_amounts"] = others
         if key is None:
             uncategorized_entry = item
         else:
@@ -1052,14 +1065,21 @@ def budgets_breakdown(category: str):
         breakdown.append(uncategorized_entry)
 
     total = round(sum(item["spent"] for item in breakdown), 2)
+    overall_others: dict[str, float] = {}
+    for item in breakdown:
+        for c, a in item.get("other_currency_amounts", {}).items():
+            overall_others[c] = round(overall_others.get(c, 0.0) + a, 2)
 
-    return {
+    response = {
         "category":    category,
         "period_from": date_from,
         "period_to":   date_to,
         "total":       total,
         "breakdown":   breakdown,
     }
+    if overall_others:
+        response["other_currency_amounts"] = overall_others
+    return response
 
 
 @app.get("/budgets/transactions")
@@ -1209,57 +1229,37 @@ def consent_callback(code: str | None = None, state: str | None = None, error: s
         return RedirectResponse("/?consent=error&reason=exchange_failed", status_code=302)
 
 
-def _sync_worker(months: int | None) -> None:
-    try:
-        run_sync(months_back=months)
-    except Exception as e:
-        _sync_state["error"] = str(e)
-    finally:
-        _sync_state["running"] = False
-        _sync_lock.release()
-
-
 @app.post("/sync/trigger")
 def sync_trigger(req: SyncTriggerRequest):
-    # User-facing, authenticated manual sync — distinct from jyske_mcp/jobs/scheduler.py's
-    # own :8081 /sync/trigger (internal cron process), which is left untouched.
-    months = max(1, min(req.months_back, 12)) if req.months_back is not None else None
-
-    if not _sync_lock.acquire(blocking=False):
-        return JSONResponse({"status": "already_running"}, status_code=409)
-
-    # Set state synchronously before returning — avoids a race where an
-    # immediate poll of /sync/status could see running: false before the
-    # background thread has actually started.
-    _sync_state["running"] = True
-    _sync_state["error"] = None
-    _sync_state["started_at"] = datetime.now(timezone.utc).isoformat()
-
-    threading.Thread(target=_sync_worker, args=(months,), daemon=True).start()
-    return JSONResponse({"status": "started"}, status_code=202)
+    # jyske_mcp/jobs/scheduler.py (internal :8081 process) is the single owner of
+    # sync execution — this route just proxies the user-facing, authenticated
+    # manual-sync request there via scheduler_client, passing its response
+    # (status/status_code) straight through so the frontend sees the exact
+    # same shape as before this change.
+    try:
+        resp = scheduler_client.trigger_sync(req.months_back)
+    except requests.RequestException as e:
+        log = logging.getLogger("app")
+        log.warning("sync trigger proxy failed: %s", e)
+        return JSONResponse({"detail": "scheduler unreachable"}, status_code=502)
+    return JSONResponse(resp.json(), status_code=resp.status_code)
 
 
 @app.get("/sync/status")
 def sync_status():
-    # last_sync shape mirrors jyske_mcp/jobs/scheduler.py's own /sync/status exactly
-    # (ISO-formatted started_at/completed_at, "details" holding the raw
-    # errors/per-account JSON blob) so both consumers see the same shape.
-    last = Storage().get_last_sync()
-    last_sync = None
-    if last is not None:
-        last_sync = {
-            "started_at": datetime.fromtimestamp(last["started_at"]).isoformat(),
-            "completed_at": datetime.fromtimestamp(last["completed_at"]).isoformat(),
-            "accounts_synced": last["accounts_synced"],
-            "transactions_fetched": last["transactions_fetched"],
-            "new_transactions": last["new_transactions"],
-            "details": last["errors"],
-        }
-    return {
-        "running": _sync_state["running"],
-        "error": _sync_state["error"],
-        "last_sync": last_sync,
-    }
+    # Proxies jyske_mcp/jobs/scheduler.py's /sync/status — that process now owns
+    # running/error state as well as last_sync, since it's the only process
+    # that actually executes syncs.
+    try:
+        resp = scheduler_client.get_status()
+    except requests.RequestException as e:
+        log = logging.getLogger("app")
+        log.warning("sync status proxy failed: %s", e)
+        return JSONResponse(
+            {"running": False, "error": "scheduler unreachable", "last_sync": None},
+            status_code=200,
+        )
+    return JSONResponse(resp.json(), status_code=resp.status_code)
 
 
 @app.get("/budgets/categories")

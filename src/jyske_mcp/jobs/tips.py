@@ -14,25 +14,21 @@ those choices.
 
 import json
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 # load .env before jyske_mcp/llm.py reads os.environ at import time
 from dotenv import load_dotenv
-from jyske_mcp.config import ENV_FILE
+from jyske_mcp.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
 load_dotenv(ENV_FILE)
 
 # Reuse the exact same log file/format as jyske_mcp/jobs/sync.py so tip-generation
 # lines show up alongside sync's/evals' own summary lines.
 import logging
 
-_LOG_FILE = Path("~/.config/mcp-bank/sync.log").expanduser()
-_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     handlers=[
-        logging.FileHandler(_LOG_FILE),
+        secure_rotating_handler(SYNC_LOG_FILE, "%(asctime)s  %(levelname)-8s  %(message)s"),
         logging.StreamHandler(),
     ],
 )
@@ -190,6 +186,7 @@ def _valid_subject_key(subject_key: str, signals: dict) -> bool:
 
 
 def run_tips() -> None:
+    secure_config_files()
     try:
         _run_tips_inner()
     except Exception as e:

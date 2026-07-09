@@ -13,25 +13,21 @@ or there are zero traces to score — never raises.
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 # load .env before jyske_mcp/llm.py reads os.environ at import time
 from dotenv import load_dotenv
-from jyske_mcp.config import ENV_FILE
+from jyske_mcp.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
 load_dotenv(ENV_FILE)
 
 # Reuse the exact same log file/format as jyske_mcp/jobs/sync.py so `Eval complete: ...`
 # lines show up alongside sync's own summary lines.
 import logging
 
-_LOG_FILE = Path("~/.config/mcp-bank/sync.log").expanduser()
-_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     handlers=[
-        logging.FileHandler(_LOG_FILE),
+        secure_rotating_handler(SYNC_LOG_FILE, "%(asctime)s  %(levelname)-8s  %(message)s"),
         logging.StreamHandler(),
     ],
 )
@@ -135,6 +131,7 @@ def _judge_trace(trace) -> dict | None:
 
 
 def run_evals() -> None:
+    secure_config_files()
     lf = get_langfuse()
     if lf is None:
         log.info("Eval complete: Langfuse disabled/unconfigured, skipping")

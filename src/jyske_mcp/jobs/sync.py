@@ -2,30 +2,28 @@ import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 # load .env before jyske_mcp/auth.py reads os.environ at import time
 from dotenv import load_dotenv
-from jyske_mcp.config import ENV_FILE
+from jyske_mcp.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
 load_dotenv(ENV_FILE)
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-from jyske_mcp.auth import auth_headers, BASE_URL
+from jyske_mcp.auth import auth_headers, BASE_URL, HTTP_TIMEOUT
 from jyske_mcp.categorizer import categorize
 from jyske_mcp.llm import simple_completion
 from jyske_mcp.storage import Storage, SessionExpiredError
 
 # ── logging ───────────────────────────────────────────────────────────────────
 
-_LOG_FILE = Path("~/.config/mcp-bank/sync.log").expanduser()
-_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
     handlers=[
-        logging.FileHandler(_LOG_FILE),
+        secure_rotating_handler(SYNC_LOG_FILE, "%(asctime)s  %(levelname)-8s  %(message)s"),
         logging.StreamHandler(),
     ],
 )
@@ -35,9 +33,46 @@ log = logging.getLogger("sync")
 
 _BALANCE_TTL = 6 * 3600   # skip balance fetch if last one was less than 6h ago
 _BASELINE_DAYS = 90        # how far back to go on first run
+STALE_SYNC_HOURS = 26
+
+
+def _build_eb_session() -> requests.Session:
+    """
+    Session with automatic retry/backoff for transient network and ASPSP
+    failures. 429 and 401 are deliberately NOT in status_forcelist — they
+    must fall through to the existing per-status handling in
+    _fetch_transactions / run_sync (429 -> truncate-and-resume, 401 ->
+    SessionExpiredError) rather than being retried/consumed here.
+    """
+    retry = Retry(
+        total=3,
+        connect=2,
+        read=1,
+        status=1,
+        status_forcelist=(500, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        backoff_factor=0.5,
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+_EB_SESSION = _build_eb_session()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def is_sync_stale(last_sync: dict | None, now: float, threshold_hours: float = STALE_SYNC_HOURS) -> bool:
+    """True if no sync has ever completed, or the last one finished more
+    than `threshold_hours` ago (a possible sign the sync is wedged)."""
+    if last_sync is None:
+        return True
+    return (now - last_sync["completed_at"]) > threshold_hours * 3600
 
 def _balance_stale(storage: Storage, account_uid: str) -> bool:
     """True if no balance data cached or last fetch was more than 6 hours ago."""
@@ -121,7 +156,7 @@ def _fetch_transactions(
         if continuation:
             params["continuation_key"] = continuation
         try:
-            r = requests.get(url, headers=auth_headers(), params=params)
+            r = _EB_SESSION.get(url, headers=auth_headers(), params=params, timeout=HTTP_TIMEOUT)
             if r.status_code == 401:
                 raise SessionExpiredError("EXPIRED_SESSION — API 401 on transaction fetch")
             if r.status_code == 429:
@@ -154,6 +189,7 @@ def _fetch_transactions(
 # ── main sync ─────────────────────────────────────────────────────────────────
 
 def run_sync(months_back: int | None = None) -> None:
+    secure_config_files()
     started_at = time.time()
     log.info("─── Sync started ───────────────────────────────────────────")
 
@@ -273,9 +309,10 @@ def run_sync(months_back: int | None = None) -> None:
 
         if _balance_stale(storage, uid):
             try:
-                r = requests.get(
+                r = _EB_SESSION.get(
                     f"{BASE_URL}/accounts/{uid}/balances",
                     headers=auth_headers(),
+                    timeout=HTTP_TIMEOUT,
                 )
                 if r.status_code == 401:
                     raise SessionExpiredError("EXPIRED_SESSION — API 401 on balance fetch")

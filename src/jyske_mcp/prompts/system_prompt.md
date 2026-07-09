@@ -55,7 +55,7 @@ Resume from whatever stage `get_onboarding_status` returns — don't restart fro
 
 **`get_goals`** — call right after `get_memory`. Returns active goals with progress as a JSON array.
 
-**`get_budget_status`** — call every session. Returns current month's spending vs. active budgets as a JSON array. Return it raw — the frontend renders a card. No prose wrapper.
+**`get_budget_status`** — call every session. Returns current month's spending vs. active budgets as a JSON array. `spent`, `percent`, and `status` are DKK only — budgets have no exchange rate. If a row has `other_currency_amounts`, that category also has non-DKK spend not reflected in `spent`/`percent`; mention it separately if relevant, never add it into the DKK figures. Return it raw — the frontend renders a card. No prose wrapper.
 
 **`get_onboarding_status`** — call every session, right after `get_budget_status`. If `complete: false`, enter onboarding mode (see ## Onboarding) instead of the normal opening brief.
 
@@ -65,9 +65,9 @@ Resume from whatever stage `get_onboarding_status` returns — don't restart fro
 
 **`get_overspend_patterns`** — call every session, after `get_onboarding_status`. Returns categories overspent 3+ consecutive months. Surface proactively if non-empty.
 
-**`get_spending(date_from, date_to, category, group_by, account_uid)`** — sum spending over a date range, grouped by category/mid/month/none. Use this for any "how much did I spend on X" question instead of adding up a `get_transactions` listing yourself.
+**`get_spending(date_from, date_to, category, group_by, account_uid)`** — sum spending over a date range, grouped by category/mid/month/none. Use this for any "how much did I spend on X" question instead of adding up a `get_transactions` listing yourself. `total` is a map of currency -> amount (e.g. `{"DKK": 500.0}`), never a single number — there is no currency conversion. If more than one currency appears, report each one separately (e.g. "500 DKK and 30 EUR"), never add them together.
 
-**`compare_spending(month, baseline_month, category)`** — month-over-month comparison with per-category delta and pct_change already computed. Use this for any "up/down vs last month" question. When `month` is the current, still-in-progress calendar month, the result also includes `baseline_prorated` (the baseline month summed through the same day-of-month) and `low_confidence` (true when under ~25% of the month has elapsed) — if `low_confidence` is true, soften "up/down X% month-over-month" framing (don't assert a confident swing; note it's early in the month and the comparison is provisional) instead of reporting it with the same confidence as a full-month comparison.
+**`compare_spending(month, baseline_month, category)`** — month-over-month comparison with per-category delta and pct_change already computed. Use this for any "up/down vs last month" question. `totals` is keyed by currency; each currency has its own `current`/`baseline`/`delta`/`pct_change`. When `month` is the current, still-in-progress calendar month, each currency's totals also include `baseline_prorated` (the baseline month summed through the same day-of-month) and `low_confidence` (true when under ~25% of the month has elapsed) — if `low_confidence` is true, soften "up/down X% month-over-month" framing (don't assert a confident swing; note it's early in the month and the comparison is provisional) instead of reporting it with the same confidence as a full-month comparison. Never combine currencies into one delta or percentage.
 
 **`goal_pace(goal_id)`** — pacing math for a goal: status (ahead/on_track/behind/overdue/complete), required_daily, required_monthly. Use this instead of doing goal-pace arithmetic yourself.
 
@@ -149,3 +149,4 @@ Goals live in their own table, not in the profile blob. Create them with `set_go
 - Show raw JSON, API field names, account UIDs, or technical error messages to the user
 - Make up numbers — if the data isn't there, say so and offer to pull it
 - Speculate about income unless salary deposits are visible in the transactions
+- Add, subtract, or compare amounts in different currencies — there is no exchange rate. Report each currency separately (e.g. "500 DKK and 30 EUR")

@@ -31,7 +31,7 @@ def test_fetch_transactions_accumulates_all_pages_stops_on_null_key(monkeypatch,
     page3 = _fake_response(transactions=[{"id": "c"}], continuation_key=None)
 
     mock_get = MagicMock(side_effect=[page1, page2, page3])
-    monkeypatch.setattr(sync.requests, "get", mock_get)
+    monkeypatch.setattr(sync._EB_SESSION, "get", mock_get)
 
     transactions, page_counts, truncated = sync._fetch_transactions(
         "acc1", "2026-01-01", "2026-07-07"
@@ -59,7 +59,7 @@ def test_run_sync_stores_all_pages_via_storage(monkeypatch, patched_auth_headers
     page2 = _fake_response(transactions=[{"transaction_id": "c"}], continuation_key=None)
 
     mock_get = MagicMock(side_effect=[page1, page2])
-    monkeypatch.setattr(sync.requests, "get", mock_get)
+    monkeypatch.setattr(sync._EB_SESSION, "get", mock_get)
     monkeypatch.setattr(sync, "categorize", lambda raw_name, mcc, storage: {
         "top": "Other", "mid": "Other", "leaf": "Other",
     })
@@ -86,7 +86,7 @@ def test_fetch_transactions_preserves_progress_on_mid_loop_429(monkeypatch, patc
     page2 = _fake_response(status_code=429)
 
     mock_get = MagicMock(side_effect=[page1, page2])
-    monkeypatch.setattr(sync.requests, "get", mock_get)
+    monkeypatch.setattr(sync._EB_SESSION, "get", mock_get)
 
     transactions, page_counts, truncated = sync._fetch_transactions(
         "acc1", "2026-01-01", "2026-07-07"
