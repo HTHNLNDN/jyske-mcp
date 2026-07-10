@@ -1,5 +1,5 @@
 # This file must never call the Enable Banking API directly.
-# All data comes from SQLite. See jyske_mcp/jobs/sync.py for data fetching.
+# All data comes from SQLite. See jyske_mcp/kernel/sync.py for data fetching.
 
 import calendar
 import json
@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 from mcp.server.fastmcp import FastMCP
 from jyske_mcp.storage import Storage, SessionExpiredError
-from jyske_mcp.categorizer import categorize, top_categories
+from jyske_mcp.kernel.categorizer import categorize, top_categories
 
 mcp = FastMCP("jyske-bank")
 storage = Storage()

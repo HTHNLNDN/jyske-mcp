@@ -2,7 +2,7 @@ import jwt, time, uuid, os
 from pathlib import Path
 from dotenv import load_dotenv
 
-from jyske_mcp.config import ENV_FILE
+from jyske_mcp.kernel.config import ENV_FILE
 
 load_dotenv(ENV_FILE)
 

@@ -5,14 +5,14 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from jyske_mcp.config import DB_FILE
+from jyske_mcp.kernel.config import DB_FILE
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# Read the sqlite path from jyske_mcp/config.py rather than alembic.ini, so it stays
-# in sync with the path the app itself uses (~/.config/mcp-bank/cache.db).
+# Read the sqlite path from jyske_mcp/kernel/config.py rather than alembic.ini, so it
+# stays in sync with the path the app itself uses (~/.config/mcp-bank/cache.db).
 config.set_main_option("sqlalchemy.url", f"sqlite:///{DB_FILE}")
 
 # Interpret the config file for Python logging.

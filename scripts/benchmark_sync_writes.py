@@ -30,7 +30,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import jyske_mcp.config as config_module
+import jyske_mcp.kernel.config as config_module
 import jyske_mcp.storage as storage_module
 from jyske_mcp.storage import Storage
 

@@ -29,8 +29,8 @@ from schema import ResearchFacts
 
 log = logging.getLogger("research_graph")
 
-# Deliberately duplicated from jyske_mcp.config (one line) so this dev tooling
-# has no import dependency on the product package.
+# Deliberately duplicated from jyske_mcp.kernel.config (one line) so this dev
+# tooling has no import dependency on the product package.
 CONFIG_DIR = Path("~/.config/mcp-bank").expanduser()
 
 RESEARCH_GRAPH_FILE = CONFIG_DIR / "research_graph.sqlite"

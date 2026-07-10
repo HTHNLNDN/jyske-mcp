@@ -1,6 +1,6 @@
 """
 Covers HTTP_TIMEOUT wiring on the two Enable Banking GET call sites in
-jyske_mcp/jobs/sync.py (transactions fetch and balances fetch), plus the
+jyske_mcp/kernel/sync.py (transactions fetch and balances fetch), plus the
 lock-release guarantee in jyske_mcp/jobs/scheduler.py when a fetch raises a
 timeout instead of returning cleanly (i.e. the sync worker's `finally` must
 still run and release `_sync_lock`, so the process never gets permanently
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import requests
 from fastapi.testclient import TestClient
 
-import jyske_mcp.jobs.sync as sync
+import jyske_mcp.kernel.sync as sync
 
 
 def _fake_response(*, transactions=None, continuation_key=None, status_code=200):

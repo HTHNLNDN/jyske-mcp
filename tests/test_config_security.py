@@ -1,6 +1,6 @@
 """
 Covers the chat.log/sync.log redaction + rotation + file-permission hardening
-in jyske_mcp/config.py: secure_config_files() must chmod every listed
+in jyske_mcp/kernel/config.py: secure_config_files() must chmod every listed
 sensitive file to 0600, and _SecureRotatingFileHandler must open (and reopen,
 e.g. after a rollover) its log file at 0600 too. Pure filesystem tests — no
 app boot, no network.
@@ -10,7 +10,7 @@ import os
 import stat
 from pathlib import Path
 
-import jyske_mcp.config as config
+import jyske_mcp.kernel.config as config
 
 
 def _mode(path: Path) -> int:

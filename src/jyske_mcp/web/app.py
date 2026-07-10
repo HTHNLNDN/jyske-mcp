@@ -1,7 +1,7 @@
 # This file must never call the Enable Banking API directly for financial
 # data (balances/transactions) — that all comes from SQLite, see
-# jyske_mcp/jobs/sync.py. The one exception is the consent/re-authorization bootstrap
-# (jyske_mcp/consent.py), which necessarily talks to Enable Banking's /auth and
+# jyske_mcp/kernel/sync.py. The one exception is the consent/re-authorization bootstrap
+# (jyske_mcp/kernel/consent.py), which necessarily talks to Enable Banking's /auth and
 # /sessions endpoints as part of the OAuth redirect flow.
 
 from fastapi import FastAPI, Request, Response
@@ -18,13 +18,13 @@ import json
 import os
 import logging
 from datetime import datetime, timezone
-from jyske_mcp.config import ENV_FILE, ROOT_DIR, CHAT_LOG_FILE, secure_config_files, secure_rotating_handler
+from jyske_mcp.kernel.config import ENV_FILE, ROOT_DIR, CHAT_LOG_FILE, secure_config_files, secure_rotating_handler
 from jyske_mcp.storage import Storage, PRIMARY_CURRENCY
-from jyske_mcp.categorizer import category_tree
-from jyske_mcp import consent as consent_lib
-from jyske_mcp import scheduler_client
-from jyske_mcp.model_catalog import all_model_ids, load_catalog
-from jyske_mcp.llm import (
+from jyske_mcp.kernel.categorizer import category_tree
+from jyske_mcp.kernel import consent as consent_lib
+from jyske_mcp.kernel import scheduler_client
+from jyske_mcp.kernel.model_catalog import all_model_ids, load_catalog
+from jyske_mcp.kernel.llm import (
     chat_completion,
     resolve_agent_llm,
     LLMNotConfiguredError,
@@ -1155,8 +1155,8 @@ def consent_status():
     last_error = None
     if last_sync and last_sync.get("errors"):
         # get_last_sync()'s "errors" holds either a plain error string (session
-        # failures, recorded directly by jyske_mcp/jobs/sync.py) or a JSON blob with
-        # per-account details (see jyske_mcp/jobs/sync.py's details_payload) — mirror
+        # failures, recorded directly by jyske_mcp/kernel/sync.py) or a JSON blob with
+        # per-account details (see jyske_mcp/kernel/sync.py's details_payload) — mirror
         # jyske_mcp/jobs/scheduler.py's /sync/status route and pass it through as-is.
         last_error = last_sync["errors"]
 

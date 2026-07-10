@@ -1,4 +1,4 @@
-.PHONY: install dev build start sync migrate migration db-status db-history langfuse langfuse-stop test dedupe bench
+.PHONY: install dev build start sync migrate migration db-status db-history langfuse langfuse-stop test lint dedupe bench
 
 # One-time (and after pulling dependency changes): editable install of the
 # src/ package + runtime deps, into the active venv.
@@ -37,6 +37,12 @@ langfuse-stop:
 
 test:
 	pytest
+
+# Enforces the kernel/slices/platform import boundaries declared in
+# pyproject.toml's [tool.importlinter] contracts. Requires import-linter,
+# installed via requirements-dev.txt.
+lint:
+	lint-imports
 
 # Dry-run report of the NULL-transaction_id dedup cleanup (writes nothing).
 # Pass --apply directly to scripts/dedupe_transactions.py to actually

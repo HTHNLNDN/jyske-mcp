@@ -1,10 +1,10 @@
 """
-Covers the stale-sync alerting added around jyske_mcp.jobs.sync.is_sync_stale
+Covers the stale-sync alerting added around jyske_mcp.kernel.sync.is_sync_stale
 and jyske_mcp.jobs.scheduler.check_sync_freshness.
 """
 import logging
 
-import jyske_mcp.jobs.sync as sync
+import jyske_mcp.kernel.sync as sync
 
 
 def test_is_sync_stale_none_last_sync_is_stale():

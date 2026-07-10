@@ -6,10 +6,10 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-# load .env before jyske_mcp.auth (imported transitively below) reads
+# load .env before jyske_mcp.kernel.auth (imported transitively below) reads
 # os.environ at import time
 from dotenv import load_dotenv
-from jyske_mcp.config import ENV_FILE, secure_config_files
+from jyske_mcp.kernel.config import ENV_FILE, secure_config_files
 load_dotenv(ENV_FILE)
 
 # Idempotent — chmods cache.db/session.json/chat.log/sync.log/.env to 0600 on
@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
-from jyske_mcp.jobs.sync import run_sync
+from jyske_mcp.kernel.sync import run_sync
 from jyske_mcp.jobs.evals import run_evals
 from jyske_mcp.jobs.tips import run_tips
 
@@ -39,7 +39,7 @@ scheduler = BackgroundScheduler()
 # user-level process, never co-located with live-banking sync/evals/tips.
 
 # This process is the single owner of sync execution — app.py's /sync/trigger
-# and /sync/status now proxy here (via jyske_mcp/scheduler_client.py) instead
+# and /sync/status now proxy here (via jyske_mcp/kernel/scheduler_client.py) instead
 # of running their own thread/lock, so a manual trigger and the 03:00 cron
 # job can never run concurrently.
 _sync_lock = threading.Lock()
@@ -68,7 +68,7 @@ def _start_sync(months_back: int | None = None) -> bool:
 
 def check_sync_freshness() -> None:
     from jyske_mcp.storage import Storage
-    from jyske_mcp.jobs.sync import is_sync_stale, STALE_SYNC_HOURS
+    from jyske_mcp.kernel.sync import is_sync_stale, STALE_SYNC_HOURS
     last = Storage().get_last_sync()
     if is_sync_stale(last, time.time()):
         if last is None:

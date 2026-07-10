@@ -3,18 +3,18 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta
 
-# load .env before jyske_mcp/auth.py reads os.environ at import time
+# load .env before jyske_mcp/kernel/auth.py reads os.environ at import time
 from dotenv import load_dotenv
-from jyske_mcp.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
+from jyske_mcp.kernel.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
 load_dotenv(ENV_FILE)
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from jyske_mcp.auth import auth_headers, BASE_URL, HTTP_TIMEOUT
-from jyske_mcp.categorizer import categorize
-from jyske_mcp.llm import simple_completion
+from jyske_mcp.kernel.auth import auth_headers, BASE_URL, HTTP_TIMEOUT
+from jyske_mcp.kernel.categorizer import categorize
+from jyske_mcp.kernel.llm import simple_completion
 from jyske_mcp.storage import Storage, SessionExpiredError
 
 # ── logging ───────────────────────────────────────────────────────────────────

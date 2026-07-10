@@ -1,7 +1,7 @@
 """Terminal fallback for (re-)establishing an Enable Banking consent session.
 Prefer the in-app flow (Settings › Bank connection › Reconnect, via the
 /consent/* routes in jyske_mcp/web/app.py) — this script shares the same
-jyske_mcp.consent logic so the two paths can't drift apart.
+jyske_mcp.kernel.consent logic so the two paths can't drift apart.
 
 scripts/callback.html is the optional landing page for this flow: host it
 anywhere and register its URL as the Enable Banking redirect URL, and it
@@ -9,7 +9,7 @@ displays the ?code= to paste below.
 """
 from pprint import pprint
 
-from jyske_mcp.consent import start_authorization, complete_authorization
+from jyske_mcp.kernel.consent import start_authorization, complete_authorization
 from jyske_mcp.storage import Storage
 
 storage = Storage()

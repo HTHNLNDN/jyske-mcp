@@ -2,8 +2,8 @@ import hashlib, json, logging, os, sqlite3, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from jyske_mcp.categorizer import categorize
-from jyske_mcp.config import CONFIG_DIR, DB_FILE, SESSION_FILE, ROOT_DIR
+from jyske_mcp.kernel.categorizer import categorize
+from jyske_mcp.kernel.config import CONFIG_DIR, DB_FILE, SESSION_FILE, ROOT_DIR
 
 log = logging.getLogger("storage")
 

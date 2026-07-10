@@ -1,7 +1,7 @@
 # Packaging only — runtime dependencies stay in requirements.txt for now.
 # The package is meant to be installed editable (pip install -e ., or
-# `make install`): jyske_mcp.config.ROOT_DIR resolves to the repo checkout,
-# where alembic.ini, static/, and .env live.
+# `make install`): jyske_mcp.kernel.config.ROOT_DIR resolves to the repo
+# checkout, where alembic.ini, static/, and .env live.
 
 [build-system]
 requires = ["setuptools>=69"]
@@ -20,4 +20,24 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-jyske_mcp = ["data/*.json", "prompts/*.md"]
+jyske_mcp = ["kernel/data/*.json", "prompts/*.md"]
+
+[tool.importlinter]
+root_package = "jyske_mcp"
+
+[[tool.importlinter.contracts]]
+name = "Kernel imports nothing upward"
+type = "forbidden"
+source_modules = ["jyske_mcp.kernel"]
+forbidden_modules = ["jyske_mcp.slices", "jyske_mcp.platform"]
+
+[[tool.importlinter.contracts]]
+name = "Slices must not import each other"
+type = "independence"
+modules = ["jyske_mcp.slices.*"]
+
+[[tool.importlinter.contracts]]
+name = "platform -> slices -> kernel layering"
+type = "layers"
+layers = ["platform", "slices", "kernel"]
+containers = ["jyske_mcp"]

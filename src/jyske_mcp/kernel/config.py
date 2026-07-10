@@ -6,7 +6,9 @@ from pathlib import Path
 # Repo root. Valid because this package is installed editable (pip install -e .)
 # by design — alembic.ini, static/, and .env are repo files, not package data,
 # and everything that needs them anchors here instead of counting parents.
-ROOT_DIR = Path(__file__).resolve().parents[2]
+# This module lives at src/jyske_mcp/kernel/config.py, so parents[3] is the
+# repo root (parents[0]=kernel, [1]=jyske_mcp, [2]=src, [3]=repo root).
+ROOT_DIR = Path(__file__).resolve().parents[3]
 ENV_FILE = ROOT_DIR / ".env"
 
 CONFIG_DIR = Path("~/.config/mcp-bank").expanduser()
@@ -46,7 +48,7 @@ class _SecureRotatingFileHandler(RotatingFileHandler):
 def secure_rotating_handler(path: Path, fmt: str, datefmt: str | None = None) -> _SecureRotatingFileHandler:
     """Build a size-rotated (LOG_MAX_BYTES x LOG_BACKUP_COUNT), owner-only
     file handler for `path`. Shared by chat.log (web/app.py) and sync.log
-    (jobs/sync.py, jobs/tips.py, jobs/evals.py) so both get identical
+    (kernel/sync.py, jobs/tips.py, jobs/evals.py) so both get identical
     rotation + permission handling."""
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = _SecureRotatingFileHandler(

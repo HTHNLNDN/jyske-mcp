@@ -2,7 +2,7 @@
 Single module for all LLM calls. Model/API-key selection is per-agent and
 DB-configured (see jyske_mcp/storage.py's agents/provider_keys tables and
 resolve_agent_llm() below) rather than a global env var — the one exception
-is jyske_mcp/jobs/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's JUDGE_MODEL,
+is jyske_mcp/kernel/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's JUDGE_MODEL,
 which are out of scope for that and keep passing an explicit bare model
 string, relying on ANTHROPIC_API_KEY from the environment exactly as before.
 
@@ -298,7 +298,7 @@ def stream_completion(messages: list, system: str, model: str, api_key: str) -> 
 def simple_completion(prompt: str, model: str, api_key: str | None = None) -> str:
     """
     api_key=None lets LiteLLM fall back to whatever's in the environment —
-    this is what jyske_mcp/jobs/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's
+    this is what jyske_mcp/kernel/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's
     JUDGE_MODEL calls rely on (both explicitly out of scope for per-agent
     DB-configured keys; they keep passing a bare model string and reading
     ANTHROPIC_API_KEY from the environment exactly as before).

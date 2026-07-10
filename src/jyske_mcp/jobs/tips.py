@@ -15,12 +15,12 @@ those choices.
 import json
 from datetime import datetime, timezone, timedelta
 
-# load .env before jyske_mcp/llm.py reads os.environ at import time
+# load .env before jyske_mcp/kernel/llm.py reads os.environ at import time
 from dotenv import load_dotenv
-from jyske_mcp.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
+from jyske_mcp.kernel.config import ENV_FILE, SYNC_LOG_FILE, secure_config_files, secure_rotating_handler
 load_dotenv(ENV_FILE)
 
-# Reuse the exact same log file/format as jyske_mcp/jobs/sync.py so tip-generation
+# Reuse the exact same log file/format as jyske_mcp/kernel/sync.py so tip-generation
 # lines show up alongside sync's/evals' own summary lines.
 import logging
 
@@ -34,8 +34,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("tips")
 
-from jyske_mcp.categorizer import top_categories
-from jyske_mcp.llm import LLMNotConfiguredError, resolve_agent_llm, simple_completion
+from jyske_mcp.kernel.categorizer import top_categories
+from jyske_mcp.kernel.llm import LLMNotConfiguredError, resolve_agent_llm, simple_completion
 from jyske_mcp.storage import Storage
 
 # server.py's tool functions are plain Python functions returning JSON

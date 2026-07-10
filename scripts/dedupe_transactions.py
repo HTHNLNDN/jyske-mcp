@@ -50,7 +50,7 @@ import argparse
 import json
 import sqlite3
 
-from jyske_mcp.config import DB_FILE
+from jyske_mcp.kernel.config import DB_FILE
 from jyske_mcp.storage import synthetic_transaction_id
 
 
