@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from mcp.server.fastmcp import FastMCP
 from jyske_mcp.storage import Storage, SessionExpiredError
 from jyske_mcp.kernel.categorizer import categorize, top_categories
+from jyske_mcp.kernel.dto import AccountDTO, BalanceSnapshotDTO
 
 mcp = FastMCP("jyske-bank")
 storage = Storage()
@@ -36,16 +37,17 @@ def list_accounts() -> str:
     except SessionExpiredError as e:
         return str(e)
 
-    accounts = session.get("accounts", [])
-    if not accounts:
+    raw_accounts = session.get("accounts", [])
+    if not raw_accounts:
         return "No accounts found in session."
 
     lines = []
-    for acc in accounts:
-        iban = acc.get("account_id", {}).get("iban", "unknown")
-        product = acc.get("product", "")
-        currency = acc.get("currency", "")
-        uid = acc["uid"]
+    for raw in raw_accounts:
+        acc = AccountDTO.from_raw(raw)
+        iban = acc.iban if acc.iban is not None else "unknown"
+        product = acc.product if acc.product is not None else ""
+        currency = acc.currency if acc.currency is not None else ""
+        uid = raw["uid"]
         lines.append(f"{product} ({currency})  IBAN: {iban}  uid: {uid}")
 
     return "\n".join(lines)
@@ -62,17 +64,18 @@ def get_balances(account_uid: str = "") -> str:
     except SessionExpiredError as e:
         return str(e)
 
-    accounts = session.get("accounts", [])
+    raw_accounts = session.get("accounts", [])
     if account_uid:
-        accounts = [a for a in accounts if a["uid"] == account_uid]
-        if not accounts:
+        raw_accounts = [a for a in raw_accounts if a["uid"] == account_uid]
+        if not raw_accounts:
             return f"No account with uid {account_uid!r} found in session."
 
     lines = []
-    for acc in accounts:
-        uid = acc["uid"]
-        iban = acc.get("account_id", {}).get("iban", uid)
-        product = acc.get("product", "")
+    for raw in raw_accounts:
+        uid = raw["uid"]
+        acc = AccountDTO.from_raw(raw)
+        iban = acc.iban if acc.iban is not None else uid
+        product = acc.product if acc.product is not None else ""
 
         data = storage.get_balances_cached(uid)
         if data is None:
@@ -80,12 +83,12 @@ def get_balances(account_uid: str = "") -> str:
             continue
 
         lines.append(f"{product} — {iban}:")
-        for b in data.get("balances", []):
-            amt = b.get("balance_amount", {})
-            lines.append(
-                f"  {b.get('balance_type', 'balance'):25s}"
-                f"  {amt.get('amount', '?'):>12}  {amt.get('currency', '')}"
-            )
+        snapshot = BalanceSnapshotDTO.from_raw(uid, data, storage.balance_fetched_at(uid))
+        for b in snapshot.balances:
+            balance_type = b.balance_type if b.balance_type is not None else "balance"
+            amount = b.amount if b.amount is not None else "?"
+            currency = b.currency if b.currency is not None else ""
+            lines.append(f"  {balance_type:25s}  {amount:>12}  {currency}")
 
     return "\n".join(lines) if lines else "No balance data returned."
 
@@ -128,7 +131,7 @@ def get_transactions(
         mcc = t.get("mcc") or t.get("merchant_category_code")
 
         cat = categorize(raw_name, mcc, storage)
-        cat_str = f"{cat['category_top']} > {cat['category_mid']}" if cat else "[needs_categorization]"
+        cat_str = f"{cat.category_top} > {cat.category_mid}" if cat else "[needs_categorization]"
 
         lines.append(f"  {date}  {amount_str}  {raw_name:<35}  {cat_str}")
 
@@ -170,10 +173,10 @@ def categorize_transaction(
     if result is None:
         return json.dumps({"needs_llm": True, "raw_name": raw_name, "mcc": mcc})
 
-    top  = result["category_top"]
-    mid  = result["category_mid"]
-    leaf = result["category_leaf"]
-    src  = result["source"]
+    top  = result.category_top
+    mid  = result.category_mid
+    leaf = result.category_leaf
+    src  = result.source
     return f"{top} > {mid} > {leaf}  (source={src})"
 
 
@@ -316,7 +319,7 @@ def get_goals() -> str:
     goals = storage.get_goals(agent_id="finance")
     if not goals:
         return "No active goals."
-    return json.dumps(goals)
+    return json.dumps([g.model_dump() for g in goals])
 
 
 @mcp.tool()
@@ -345,9 +348,9 @@ def get_onboarding_status() -> str:
     status = storage.get_onboarding(agent_id="finance")
     if status is None:
         return json.dumps({"complete": False, "stage": "income"})
-    if status.get("completed_at"):
+    if status.completed_at:
         return json.dumps({"complete": True})
-    return json.dumps({"complete": False, **status})
+    return json.dumps({"complete": False, **status.model_dump()})
 
 
 @mcp.tool()
@@ -391,7 +394,7 @@ def get_overspend_patterns() -> str:
     patterns = storage.get_overspend_patterns(agent_id="finance", consecutive_months=3)
     if not patterns:
         return "No recurring overspend patterns detected."
-    return json.dumps(patterns)
+    return json.dumps([p.model_dump() for p in patterns])
 
 
 # ── deterministic math / aggregation tools ──────────────────────────────────
@@ -638,17 +641,17 @@ def goal_pace(goal_id: int = 0) -> str:
     """
     goals = storage.get_goals(agent_id="finance")
     if goal_id:
-        goals = [g for g in goals if g["id"] == goal_id]
+        goals = [g for g in goals if g.id == goal_id]
 
     now = datetime.now(timezone.utc)
     results = []
     for g in goals:
-        target = g["target_amount"] or 0.0
-        current = g["current_amount"] or 0.0
-        deadline_date = _parse_iso_date(g.get("deadline"))
+        target = g.target_amount or 0.0
+        current = g.current_amount or 0.0
+        deadline_date = _parse_iso_date(g.deadline)
         created_date = (
-            datetime.fromtimestamp(g["created_at"], tz=timezone.utc)
-            if g.get("created_at") else None
+            datetime.fromtimestamp(g.created_at, tz=timezone.utc)
+            if g.created_at else None
         )
 
         pct_complete = round(current / target * 100, 1) if target > 0 else None
@@ -702,8 +705,8 @@ def goal_pace(goal_id: int = 0) -> str:
                 ).strftime("%Y-%m-%d")
 
         results.append({
-            "goal_id":                    g["id"],
-            "name":                       g["name"],
+            "goal_id":                    g.id,
+            "name":                       g.name,
             "status":                     status,
             "pct_complete":               pct_complete,
             "days_remaining":             days_remaining,
@@ -1023,9 +1026,16 @@ def recurring_charges(lookback_days: int = 180, min_count: int = 3) -> str:
     statuses = storage.get_recurring_statuses()
     today = datetime.now(timezone.utc)
 
+    # _classify_recurring is a pure function tested directly with hand-built
+    # plain dicts (tests/test_classify_recurring.py) — convert the DTOs from
+    # Storage back to that same dict shape at this boundary rather than
+    # changing its signature.
+    candidate_dicts = [c.model_dump() for c in candidates]
+    status_dicts = {k: v.model_dump() for k, v in statuses.items()}
+
     recurring = []
-    for candidate in candidates:
-        row = _classify_recurring(candidate, statuses, today, lookback_days, min_count)
+    for candidate in candidate_dicts:
+        row = _classify_recurring(candidate, status_dicts, today, lookback_days, min_count)
         if row is not None:
             recurring.append(row)
 
@@ -1086,10 +1096,10 @@ def get_current_tip() -> str:
     if tip is None:
         return "No tip generated today."
     return json.dumps({
-        "tip_id":          tip["id"],
-        "tip_date":        tip["tip_date"],
-        "tip_text":        tip["tip_text"],
-        "feedback_status": tip["feedback_status"],
+        "tip_id":          tip.id,
+        "tip_date":        tip.tip_date,
+        "tip_text":        tip.tip_text,
+        "feedback_status": tip.feedback_status,
     })
 
 

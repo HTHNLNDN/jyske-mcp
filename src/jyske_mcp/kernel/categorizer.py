@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from jyske_mcp.kernel.dto import MerchantCategoryDTO
+
 _CATEGORIES_FILE = Path(__file__).parent / "data" / "categories.json"
 _MCC_CODES_FILE = Path(__file__).parent / "data" / "mcc_codes.json"
 
@@ -54,9 +56,9 @@ def category_tree() -> dict[str, list[str]]:
     return _category_tree
 
 
-def categorize(raw_name: str, mcc: str | None, storage, conn=None) -> dict | None:
+def categorize(raw_name: str, mcc: str | None, storage, conn=None) -> MerchantCategoryDTO | None:
     """
-    Return a category dict or None if LLM categorization is needed.
+    Return a MerchantCategoryDTO or None if LLM categorization is needed.
 
     Resolution order:
       1. merchants table cache (any source)
@@ -89,14 +91,14 @@ def categorize(raw_name: str, mcc: str | None, storage, conn=None) -> dict | Non
                 source="mcc_lookup",
                 conn=conn,
             )
-            return {
-                "category_top":  top,
-                "category_mid":  mid,
-                "category_leaf": leaf,
-                "resolved_name": "",
-                "mcc":           mcc,
-                "source":        "mcc_lookup",
-            }
+            return MerchantCategoryDTO(
+                category_top=top,
+                category_mid=mid,
+                category_leaf=leaf,
+                resolved_name="",
+                mcc=mcc,
+                source="mcc_lookup",
+            )
 
     # 3 — signal LLM needed
     return None

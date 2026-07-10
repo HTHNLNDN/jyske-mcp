@@ -742,9 +742,9 @@ def list_agents():
     agents = storage.get_agents()
     result = []
     for a in agents:
-        model = a.get("model")
+        model = a.model
         configured = bool(model) and bool(storage.get_provider_key(model.split("/")[0]))
-        result.append({**a, "configured": configured})
+        result.append({**a.model_dump(), "configured": configured})
     return result
 
 
@@ -804,11 +804,11 @@ def get_history():
     entries = Storage().get_all_summaries()
     result = []
     for e in entries:
-        dt = datetime.fromtimestamp(e["created_at"])
+        dt = datetime.fromtimestamp(e.created_at)
         result.append({
             "date": dt.strftime("%b %d, %Y"),
             "period": dt.strftime("%Y-%m-%d"),
-            "summary": e["summary"],
+            "summary": e.summary,
         })
     result.reverse()
     return result
@@ -987,7 +987,7 @@ def tip_today():
     tip = Storage().get_tip_for_date(today)
     if tip is None:
         return {"tip": None}
-    return {"tip": tip}
+    return {"tip": tip.model_dump()}
 
 
 @app.post("/tip/feedback")
@@ -1106,19 +1106,20 @@ def budgets_transactions(
         "category_mid": None if uncategorized else mid,
         "period_from":  date_from,
         "period_to":    date_to,
-        "items":        items,
+        "items":        [i.model_dump() for i in items],
     }
 
 
 @app.get("/goals")
 def goals():
-    # Same reasoning as /budgets/status: Storage().get_goals() returns
-    # list[dict] directly. goal_pace() is the MCP tool (imported above,
-    # reused as-is per convention) and returns a JSON string keyed by
-    # "goal_id" per goal — matches Storage().get_goals()'s "id" field.
+    # Same reasoning as /budgets/status used to be: Storage().get_goals()
+    # now returns list[GoalDTO] — model_dump() each one back to a plain
+    # dict before merging in "pace". goal_pace() is the MCP tool (imported
+    # above, reused as-is per convention) and returns a JSON string keyed by
+    # "goal_id" per goal — matches GoalDTO's "id" field.
     base = Storage().get_goals()
     pace = {p["goal_id"]: p for p in json.loads(goal_pace())}
-    return {"goals": [{**g, "pace": pace.get(g["id"])} for g in base]}
+    return {"goals": [{**g.model_dump(), "pace": pace.get(g.id)} for g in base]}
 
 
 @app.get("/audit/data")
@@ -1138,11 +1139,11 @@ def audit_data(agent_id: str = "finance"):
     transactions = storage.get_all_transactions()
     return {
         "profile":      storage.get_all_profile(),
-        "summaries":    storage.get_all_summaries(),
+        "summaries":    [s.model_dump() for s in storage.get_all_summaries()],
         "budgets":      storage.get_budget_status(agent_id),
-        "goals":        storage.get_goals(agent_id),
-        "tips":         storage.get_all_tips_with_feedback(agent_id),
-        "transactions": {"count": len(transactions), "items": transactions},
+        "goals":        [g.model_dump() for g in storage.get_goals(agent_id)],
+        "tips":         [t.model_dump() for t in storage.get_all_tips_with_feedback(agent_id)],
+        "transactions": {"count": len(transactions), "items": [t.model_dump() for t in transactions]},
     }
 
 

@@ -1,12 +1,17 @@
 # Local secret/sensitive-file scanning, run on every `git commit`.
 # Install with: pip install pre-commit && pre-commit install
 #
-# Two detection-only hooks (no auto-fix / auto-reformat):
+# Three detection-only hooks (no auto-fix / auto-reformat):
 #   1. gitleaks       - scans staged diffs for credential/API-key-shaped strings.
 #   2. block-sensitive-files - hard-blocks data/backup file extensions by name,
 #      since gitleaks does not scan binary file content and would not catch a
 #      committed .db/.bak file with real financial data but no secret-shaped
 #      strings in it.
+#   3. lint-imports   - enforces the kernel/slices/platform architecture
+#      boundaries declared in pyproject.toml's [tool.importlinter] contracts
+#      (see the VSA restructure epic). Local, not the remote hook, since it
+#      needs this repo's own installed package graph (requires
+#      import-linter, installed via requirements-dev.txt) — see `make lint`.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
@@ -20,3 +25,9 @@ repos:
         language: fail
         entry: "Refusing to commit: looks like a data/backup file. Add to .gitignore if intentional, or remove from staging."
         files: '\.(db|sqlite|sqlite3|bak|dump|sql)$'
+
+      - id: lint-imports
+        name: Enforce kernel/slices/platform import boundaries
+        language: system
+        entry: lint-imports
+        pass_filenames: false

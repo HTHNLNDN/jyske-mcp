@@ -37,6 +37,7 @@ log = logging.getLogger("tips")
 from jyske_mcp.kernel.categorizer import top_categories
 from jyske_mcp.kernel.llm import LLMNotConfiguredError, resolve_agent_llm, simple_completion
 from jyske_mcp.storage import Storage
+from jyske_mcp.slices.finance.dto import TipDTO
 
 # server.py's tool functions are plain Python functions returning JSON
 # strings — same import-and-call pattern app.py already uses for _run_tool,
@@ -104,14 +105,14 @@ def _assemble_signals(date_from: str, date_to: str) -> dict:
     }
 
 
-def _tip_prompt(signals: dict, recent_tips: list[dict], rejected_subjects: set[str]) -> str:
+def _tip_prompt(signals: dict, recent_tips: list[TipDTO], rejected_subjects: set[str]) -> str:
     signals_json = json.dumps(signals, ensure_ascii=False)
 
     recent_lines = []
     for t in recent_tips:
         recent_lines.append(
-            f"- [{t['tip_date']}] ({t['feedback_status']}) {t['tip_text']!r}"
-            + (f" — reason: {t['feedback_reason_text']!r}" if t.get("feedback_reason_text") else "")
+            f"- [{t.tip_date}] ({t.feedback_status}) {t.tip_text!r}"
+            + (f" — reason: {t.feedback_reason_text!r}" if t.feedback_reason_text else "")
         )
     recent_block = "\n".join(recent_lines) if recent_lines else "(none yet)"
 

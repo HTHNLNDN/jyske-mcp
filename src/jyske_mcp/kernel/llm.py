@@ -52,19 +52,19 @@ def resolve_agent_llm(agent_id: str) -> AgentLLMConfig:
     if agent is None:
         raise LLMNotConfiguredError(f"Unknown agent '{agent_id}'.")
 
-    if not agent.get("model"):
+    if not agent.model:
         raise LLMNotConfiguredError(
             "No model selected for this agent — open Settings › Model & keys."
         )
 
-    provider = agent["model"].split("/")[0]
+    provider = agent.model.split("/")[0]
     key = storage.get_provider_key(provider)
     if not key:
         raise LLMNotConfiguredError(
             f"No API key set for {provider} — add it in Settings › Model & keys."
         )
 
-    return AgentLLMConfig(model=agent["model"], api_key=key)
+    return AgentLLMConfig(model=agent.model, api_key=key)
 
 
 # ── Langfuse ──────────────────────────────────────────────────────────────────

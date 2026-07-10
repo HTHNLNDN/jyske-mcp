@@ -4,6 +4,26 @@ from pathlib import Path
 
 from jyske_mcp.kernel.categorizer import categorize
 from jyske_mcp.kernel.config import CONFIG_DIR, DB_FILE, SESSION_FILE, ROOT_DIR
+from jyske_mcp.kernel.dto import (
+    AgentDTO,
+    MerchantCategoryDTO,
+    SummaryDTO,
+    SyncRecordDTO,
+    TransactionRowDTO,
+)
+from jyske_mcp.slices.finance.dto import (
+    BudgetDTO,
+    BudgetHistoryEntryDTO,
+    BudgetStatusDTO,
+    GoalDTO,
+    OnboardingDTO,
+    OverspendPatternDTO,
+    RecurringCandidateDTO,
+    RecurringStatusDTO,
+    SpendingRowDTO,
+    TipDTO,
+    TransactionLineDTO,
+)
 
 log = logging.getLogger("storage")
 
@@ -85,7 +105,46 @@ def synthetic_transaction_id(account_uid: str, tx: dict) -> str:
     return "synth:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-class Storage:
+class KernelStorage:
+    """Generic-primitive storage surface: session, cache, merchant
+    categorization, transactions/balances, syncs, provider_keys, agents,
+    session_summaries, user_profile. No finance semantics (no
+    `direction != 'CRDT'` money math, no budget/goal/tip/recurring/
+    onboarding concepts) — see
+    .agent/epics/vsa-restructure-blueprint.md §2 for the exact bucketing.
+
+    Transitional home: this class lives in jyske_mcp/storage.py (NOT yet
+    kernel/storage.py) — deliverable #5 defines the seam in place;
+    deliverable #6 does the physical relocation.
+    """
+
+    def _db(self) -> sqlite3.Connection:
+        """The single connection primitive both KernelStorage and
+        FinanceStorage use (FinanceStorage extends this class rather than
+        opening its own sqlite3.connect — see FinanceStorage's docstring).
+        Re-reads _CACHE_DB/CONFIG_DIR at call time, which is what lets
+        tests/conftest.py's full_schema_storage fixture (and every other
+        fixture in this suite) redirect every Storage()/KernelStorage()/
+        FinanceStorage() instance by monkeypatching those two module
+        globals."""
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(CONFIG_DIR, 0o700)
+        conn = sqlite3.connect(str(_CACHE_DB))
+        # Unconditional, not just on first creation — a prior run could have
+        # left cache.db with looser permissions (e.g. restored from a backup,
+        # or created before this hardening existed), so re-assert 0600 on
+        # every connection rather than gating on is_new.
+        os.chmod(_CACHE_DB, 0o600)
+        return conn
+
+    # ── session ──────────────────────────────────────────────────────────────
+    # Deliberately dict, not SessionDTO: get_session/read_session_unchecked/
+    # save_session round-trip the raw Enable Banking session payload
+    # byte-for-byte (tests/test_consent_flow.py pins exact equality on the
+    # saved `accounts` list) — see jyske_mcp/kernel/dto.py's module docstring.
+    # Callers wanting typed access build SessionDTO/AccountDTO via
+    # .from_raw() themselves (see mcp/server.py's list_accounts/get_balances).
+
     def get_session(self) -> dict:
         if not _SESSION_FILE.exists():
             raise SessionExpiredError(
@@ -114,6 +173,8 @@ class Storage:
         _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
         _SESSION_FILE.write_text(json.dumps(data, indent=2))
 
+    # ── cache (opaque k/v blobs — never DTO'd) ──────────────────────────────
+
     def cache_get(self, key: str) -> dict | None:
         conn = self._db()
         row = conn.execute(
@@ -133,7 +194,9 @@ class Storage:
         conn.commit()
         conn.close()
 
-    def merchant_get(self, raw_name: str, conn=None) -> dict | None:
+    # ── merchant categorization ─────────────────────────────────────────────
+
+    def merchant_get(self, raw_name: str, conn=None) -> MerchantCategoryDTO | None:
         own = conn is None
         if own:
             conn = self._db()
@@ -146,14 +209,14 @@ class Storage:
             conn.close()
         if row is None:
             return None
-        return {
-            "category_top":  row[0],
-            "category_mid":  row[1],
-            "category_leaf": row[2],
-            "resolved_name": row[3],
-            "mcc":           row[4],
-            "source":        row[5],
-        }
+        return MerchantCategoryDTO(
+            category_top=row[0],
+            category_mid=row[1],
+            category_leaf=row[2],
+            resolved_name=row[3],
+            mcc=row[4],
+            source=row[5],
+        )
 
     def merchant_set(
         self,
@@ -196,6 +259,9 @@ class Storage:
         transactions.transaction_id (the bank's own reference column).
 
         Returns None if transaction_id doesn't resolve to a real row.
+
+        Small, ad-hoc result shape (not one of the §3 DTOs) — kept as a
+        plain dict, unchanged.
         """
         conn = self._db()
         row = conn.execute(
@@ -239,6 +305,8 @@ class Storage:
             "transactions_updated": transactions_updated,
         }
 
+    # ── user_profile (opaque JSON — never DTO'd) ────────────────────────────
+
     def get_profile(self, key: str) -> dict | None:
         conn = self._db()
         row = conn.execute(
@@ -267,6 +335,8 @@ class Storage:
         conn.close()
         return {key: json.loads(value) for key, value in rows}
 
+    # ── session_summaries ────────────────────────────────────────────────────
+
     def add_session_summary(self, summary: str, agent_id: str = "finance") -> None:
         conn = self._db()
         conn.execute(
@@ -290,13 +360,15 @@ class Storage:
         conn.close()
         return [row[0] for row in reversed(rows)]
 
-    def get_all_summaries(self) -> list[dict]:
+    def get_all_summaries(self) -> list[SummaryDTO]:
         conn = self._db()
         rows = conn.execute(
             "SELECT summary, created_at FROM session_summaries ORDER BY id DESC"
         ).fetchall()
         conn.close()
-        return [{"summary": row[0], "created_at": row[1]} for row in rows]
+        return [SummaryDTO(summary=row[0], created_at=row[1]) for row in rows]
+
+    # ── transactions ─────────────────────────────────────────────────────────
 
     def store_transaction(self, account_uid: str, tx: dict, conn=None) -> None:
         """Insert/upsert one transaction row plus its inline category.
@@ -353,7 +425,7 @@ class Storage:
                     "UPDATE transactions "
                     "SET category_top = ?, category_mid = ?, category_leaf = ? "
                     "WHERE transaction_id = ?",
-                    (cat["category_top"], cat["category_mid"], cat["category_leaf"], tid),
+                    (cat.category_top, cat.category_mid, cat.category_leaf, tid),
                 )
 
         if own:
@@ -419,6 +491,59 @@ class Storage:
         conn.close()
         return affected
 
+    def get_transactions_cached(self, account_uid: str, date_from: str, date_to: str) -> list[dict]:
+        """Raw Enable Banking transaction dicts — deliberately opaque, NOT
+        DTO'd (see jyske_mcp/kernel/dto.py's module docstring)."""
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT raw_data FROM transactions "
+            "WHERE account_uid = ? AND date >= ? AND date <= ? "
+            "ORDER BY date DESC",
+            (account_uid, date_from, date_to),
+        ).fetchall()
+        conn.close()
+        return [json.loads(r[0]) for r in rows]
+
+    def get_all_transactions(self) -> list[TransactionRowDTO]:
+        """Every transaction row, compact typed columns only — raw_data is
+        deliberately excluded (see /audit/data in app.py: that endpoint must
+        never expose the raw Enable Banking payload). Transactions are
+        account-global, not agent-scoped, so this returns everything."""
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT id, account_uid, transaction_id, date, amount, currency, "
+            "description, mcc, category_top, category_mid, category_leaf, "
+            "direction, created_at "
+            "FROM transactions ORDER BY date DESC"
+        ).fetchall()
+        conn.close()
+        return [
+            TransactionRowDTO(
+                id=r[0],
+                account_uid=r[1],
+                transaction_id=r[2],
+                date=r[3],
+                amount=r[4],
+                currency=r[5],
+                description=r[6],
+                mcc=r[7],
+                category_top=r[8],
+                category_mid=r[9],
+                category_leaf=r[10],
+                direction=r[11],
+                created_at=r[12],
+            )
+            for r in rows
+        ]
+
+    # ── balances ─────────────────────────────────────────────────────────────
+    # Deliberately dict, not BalanceSnapshotDTO: store_balance/
+    # get_balances_cached round-trip the raw Enable Banking balances payload
+    # byte-for-byte (tests/test_consent_flow.py pins exact equality after
+    # remap_account_uid) — see jyske_mcp/kernel/dto.py's module docstring.
+    # Callers wanting typed access build BalanceSnapshotDTO/BalanceLineDTO via
+    # .from_raw() themselves (see mcp/server.py's get_balances).
+
     def store_balance(self, account_uid: str, data: dict) -> None:
         conn = self._db()
         conn.execute(
@@ -466,49 +591,6 @@ class Storage:
         conn.commit()
         conn.close()
 
-    def get_transactions_cached(self, account_uid: str, date_from: str, date_to: str) -> list[dict]:
-        conn = self._db()
-        rows = conn.execute(
-            "SELECT raw_data FROM transactions "
-            "WHERE account_uid = ? AND date >= ? AND date <= ? "
-            "ORDER BY date DESC",
-            (account_uid, date_from, date_to),
-        ).fetchall()
-        conn.close()
-        return [json.loads(r[0]) for r in rows]
-
-    def get_all_transactions(self) -> list[dict]:
-        """Every transaction row, compact typed columns only — raw_data is
-        deliberately excluded (see /audit/data in app.py: that endpoint must
-        never expose the raw Enable Banking payload). Transactions are
-        account-global, not agent-scoped, so this returns everything."""
-        conn = self._db()
-        rows = conn.execute(
-            "SELECT id, account_uid, transaction_id, date, amount, currency, "
-            "description, mcc, category_top, category_mid, category_leaf, "
-            "direction, created_at "
-            "FROM transactions ORDER BY date DESC"
-        ).fetchall()
-        conn.close()
-        return [
-            {
-                "id":             r[0],
-                "account_uid":    r[1],
-                "transaction_id": r[2],
-                "date":           r[3],
-                "amount":         r[4],
-                "currency":       r[5],
-                "description":    r[6],
-                "mcc":            r[7],
-                "category_top":   r[8],
-                "category_mid":   r[9],
-                "category_leaf":  r[10],
-                "direction":      r[11],
-                "created_at":     r[12],
-            }
-            for r in rows
-        ]
-
     def get_balances_cached(self, account_uid: str) -> dict | None:
         conn = self._db()
         row = conn.execute(
@@ -520,7 +602,15 @@ class Storage:
             return None
         return json.loads(row[0])
 
+    # ── syncs ────────────────────────────────────────────────────────────────
+
     def get_last_sync(self) -> dict | None:
+        """Returns plain dict (not SyncRecordDTO) — jyske_mcp.kernel.sync.
+        is_sync_stale(last_sync: dict | None, ...) is a pure function tested
+        directly with hand-built partial dicts (tests/jobs/test_sync_freshness.py)
+        and does `last_sync["completed_at"]` subscript access, so the value
+        flowing into it must stay dict-shaped. SyncRecordDTO is still built
+        here for validation/typing, then converted back via model_dump()."""
         conn = self._db()
         row = conn.execute(
             "SELECT started_at, completed_at, accounts_synced, transactions_fetched, "
@@ -529,14 +619,15 @@ class Storage:
         conn.close()
         if row is None:
             return None
-        return {
-            "started_at":           row[0],
-            "completed_at":         row[1],
-            "accounts_synced":      row[2],
-            "transactions_fetched": row[3],
-            "new_transactions":     row[4],
-            "errors":               row[5],
-        }
+        dto = SyncRecordDTO(
+            started_at=row[0],
+            completed_at=row[1],
+            accounts_synced=row[2],
+            transactions_fetched=row[3],
+            new_transactions=row[4],
+            errors=row[5],
+        )
+        return dto.model_dump()
 
     def record_sync(
         self,
@@ -556,6 +647,199 @@ class Storage:
         )
         conn.commit()
         conn.close()
+
+    # ── provider keys ────────────────────────────────────────────────────────
+
+    def get_provider_key(self, provider: str) -> str | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT api_key FROM provider_keys WHERE provider = ?", (provider,)
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+
+    def set_provider_key(self, provider: str, api_key: str) -> None:
+        now = time.time()
+        conn = self._db()
+        conn.execute(
+            "INSERT INTO provider_keys (provider, api_key, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(provider) DO UPDATE SET api_key=excluded.api_key, updated_at=excluded.updated_at",
+            (provider, api_key, now, now),
+        )
+        conn.commit()
+        conn.close()
+
+    def delete_provider_key(self, provider: str) -> None:
+        conn = self._db()
+        conn.execute("DELETE FROM provider_keys WHERE provider = ?", (provider,))
+        conn.commit()
+        conn.close()
+
+    def list_providers_with_keys(self) -> set[str]:
+        conn = self._db()
+        rows = conn.execute("SELECT provider FROM provider_keys").fetchall()
+        conn.close()
+        return {row[0] for row in rows}
+
+    # ── agents ───────────────────────────────────────────────────────────────
+
+    def get_agents(self) -> list[AgentDTO]:
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT id, name, description, model, created_at, updated_at FROM agents ORDER BY id"
+        ).fetchall()
+        conn.close()
+        return [
+            AgentDTO(id=r[0], name=r[1], description=r[2], model=r[3], created_at=r[4], updated_at=r[5])
+            for r in rows
+        ]
+
+    def get_agent(self, agent_id: str) -> AgentDTO | None:
+        conn = self._db()
+        row = conn.execute(
+            "SELECT id, name, description, model, created_at, updated_at FROM agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        conn.close()
+        if row is None:
+            return None
+        return AgentDTO(
+            id=row[0], name=row[1], description=row[2], model=row[3], created_at=row[4], updated_at=row[5]
+        )
+
+    def set_agent_model(self, agent_id: str, model: str) -> None:
+        conn = self._db()
+        conn.execute(
+            "UPDATE agents SET model = ?, updated_at = ? WHERE id = ?",
+            (model, time.time(), agent_id),
+        )
+        conn.commit()
+        conn.close()
+
+
+class FinanceStorage(KernelStorage):
+    """Finance-domain storage surface: spending aggregation (the
+    `direction != 'CRDT'` money math), budgets/budget-status, goals,
+    recurring-charge detection, onboarding, budget history/overspend
+    patterns, tips. See
+    .agent/epics/vsa-restructure-blueprint.md §2 for the exact bucketing.
+
+    Extends KernelStorage (rather than composing/opening its own
+    sqlite3.connect) specifically to reuse its `_db()` connection primitive
+    — the single kernel-owned connect() the blueprint requires both
+    surfaces obtain their connection from, so tests/conftest.py's
+    full_schema_storage fixture (which monkeypatches the module-level
+    _CACHE_DB/CONFIG_DIR globals _db() reads) redirects both surfaces
+    identically. This also mirrors the real, eventual import direction
+    deliverable #6 makes physical: slices/finance may import kernel, never
+    the reverse (see pyproject.toml's "Kernel imports nothing upward"
+    import-linter contract).
+
+    Transitional home: this class lives in jyske_mcp/storage.py (NOT yet
+    slices/finance/storage.py) — see KernelStorage's docstring.
+    """
+
+    # ── spending aggregation ─────────────────────────────────────────────────
+
+    def sum_spending(
+        self,
+        date_from: str,
+        date_to: str,
+        category_top: str | None = None,
+        account_uid: str | None = None,
+        group_by: str = "category",
+    ) -> list[dict]:
+        """
+        Sum debit spending (direction != 'CRDT') between two ISO dates,
+        grouped by the requested key. Always grouped by currency too — today
+        every row is DKK, but this stops a future non-DKK account from
+        silently blending into a DKK total (no currency conversion here,
+        just corruption avoidance).
+
+        Returns plain dict rows (not SpendingRowDTO) — tests/test_sum_spending.py
+        and tests/test_direction_null_undercount_bug.py subscript the raw
+        return value directly (`rows[0]["amount"]`), so this stays
+        dict-shaped; SpendingRowDTO is still built per row for validation/
+        typing, then converted back via model_dump().
+        """
+        group_cols = {
+            "category": "category_top",
+            "mid":      "category_mid",
+            "month":    "substr(date, 1, 7)",
+            "none":     None,
+        }
+        if group_by not in group_cols:
+            raise ValueError(
+                f"Invalid group_by: {group_by!r}. Must be one of {sorted(group_cols)}"
+            )
+        group_col = group_cols[group_by]
+        select_key = group_col if group_col is not None else "NULL"
+
+        query = (
+            f"SELECT {select_key}, currency, SUM(amount), COUNT(*) "
+            "FROM transactions WHERE direction != 'CRDT' AND date BETWEEN ? AND ?"
+        )
+        params: list = [date_from, date_to]
+        if category_top:
+            query += " AND category_top = ?"
+            params.append(category_top)
+        if account_uid:
+            query += " AND account_uid = ?"
+            params.append(account_uid)
+        query += f" GROUP BY {select_key}, currency"
+
+        conn = self._db()
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            SpendingRowDTO(
+                key=row[0], currency=row[1], amount=round(row[2] or 0.0, 2), count=row[3]
+            ).model_dump()
+            for row in rows
+        ]
+
+    def get_transactions_by_category(
+        self,
+        date_from: str,
+        date_to: str,
+        category_top: str,
+        category_mid: str | None = None,
+        uncategorized: bool = False,
+        account_uid: str | None = None,
+    ) -> list[TransactionLineDTO]:
+        """
+        Compact transaction rows (never raw_data — see the no-raw-transaction-
+        data rule) for a single category/mid, newest first. Filtering MUST
+        mirror sum_spending()'s exactly (direction != 'CRDT', date BETWEEN,
+        category_top =) so line items always reconcile with the aggregate
+        totals shown above them in the UI.
+        """
+        query = (
+            "SELECT id, date, amount, currency, description "
+            "FROM transactions WHERE direction != 'CRDT' AND date BETWEEN ? AND ? "
+            "AND category_top = ?"
+        )
+        params: list = [date_from, date_to, category_top]
+        if uncategorized:
+            query += " AND (category_mid IS NULL OR category_mid = '')"
+        elif category_mid is not None:
+            query += " AND category_mid = ?"
+            params.append(category_mid)
+        if account_uid:
+            query += " AND account_uid = ?"
+            params.append(account_uid)
+        query += " ORDER BY date DESC"
+
+        conn = self._db()
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [
+            TransactionLineDTO(id=r[0], date=r[1], amount=r[2], currency=r[3], description=r[4])
+            for r in rows
+        ]
+
+    # ── budgets ──────────────────────────────────────────────────────────────
 
     def set_budget(
         self,
@@ -588,7 +872,7 @@ class Storage:
         conn.commit()
         conn.close()
 
-    def get_budgets(self, agent_id: str = "finance") -> list[dict]:
+    def get_budgets(self, agent_id: str = "finance") -> list[BudgetDTO]:
         conn = self._db()
         rows = conn.execute(
             "SELECT id, category_top, category_mid, limit_amount, period, created_at "
@@ -597,178 +881,9 @@ class Storage:
         ).fetchall()
         conn.close()
         return [
-            {
-                "id":           r[0],
-                "category_top": r[1],
-                "category_mid": r[2],
-                "limit_amount": r[3],
-                "period":       r[4],
-                "created_at":   r[5],
-            }
+            BudgetDTO(id=r[0], category_top=r[1], category_mid=r[2], limit_amount=r[3], period=r[4], created_at=r[5])
             for r in rows
         ]
-
-    def sum_spending(
-        self,
-        date_from: str,
-        date_to: str,
-        category_top: str | None = None,
-        account_uid: str | None = None,
-        group_by: str = "category",
-    ) -> list[dict]:
-        """
-        Sum debit spending (direction != 'CRDT') between two ISO dates,
-        grouped by the requested key. Always grouped by currency too — today
-        every row is DKK, but this stops a future non-DKK account from
-        silently blending into a DKK total (no currency conversion here,
-        just corruption avoidance).
-        """
-        group_cols = {
-            "category": "category_top",
-            "mid":      "category_mid",
-            "month":    "substr(date, 1, 7)",
-            "none":     None,
-        }
-        if group_by not in group_cols:
-            raise ValueError(
-                f"Invalid group_by: {group_by!r}. Must be one of {sorted(group_cols)}"
-            )
-        group_col = group_cols[group_by]
-        select_key = group_col if group_col is not None else "NULL"
-
-        query = (
-            f"SELECT {select_key}, currency, SUM(amount), COUNT(*) "
-            "FROM transactions WHERE direction != 'CRDT' AND date BETWEEN ? AND ?"
-        )
-        params: list = [date_from, date_to]
-        if category_top:
-            query += " AND category_top = ?"
-            params.append(category_top)
-        if account_uid:
-            query += " AND account_uid = ?"
-            params.append(account_uid)
-        query += f" GROUP BY {select_key}, currency"
-
-        conn = self._db()
-        rows = conn.execute(query, params).fetchall()
-        conn.close()
-        return [
-            {
-                "key":      row[0],
-                "currency": row[1],
-                "amount":   round(row[2] or 0.0, 2),
-                "count":    row[3],
-            }
-            for row in rows
-        ]
-
-    def get_transactions_by_category(
-        self,
-        date_from: str,
-        date_to: str,
-        category_top: str,
-        category_mid: str | None = None,
-        uncategorized: bool = False,
-        account_uid: str | None = None,
-    ) -> list[dict]:
-        """
-        Compact transaction rows (never raw_data — see the no-raw-transaction-
-        data rule) for a single category/mid, newest first. Filtering MUST
-        mirror sum_spending()'s exactly (direction != 'CRDT', date BETWEEN,
-        category_top =) so line items always reconcile with the aggregate
-        totals shown above them in the UI.
-        """
-        query = (
-            "SELECT id, date, amount, currency, description "
-            "FROM transactions WHERE direction != 'CRDT' AND date BETWEEN ? AND ? "
-            "AND category_top = ?"
-        )
-        params: list = [date_from, date_to, category_top]
-        if uncategorized:
-            query += " AND (category_mid IS NULL OR category_mid = '')"
-        elif category_mid is not None:
-            query += " AND category_mid = ?"
-            params.append(category_mid)
-        if account_uid:
-            query += " AND account_uid = ?"
-            params.append(account_uid)
-        query += " ORDER BY date DESC"
-
-        conn = self._db()
-        rows = conn.execute(query, params).fetchall()
-        conn.close()
-        return [
-            {
-                "id":          r[0],
-                "date":        r[1],
-                "amount":      r[2],
-                "currency":    r[3],
-                "description": r[4],
-            }
-            for r in rows
-        ]
-
-    def get_recurring_candidates(self, lookback_days: int = 180, min_count: int = 3) -> list[dict]:
-        """
-        Return candidate merchants for recurring-charge classification:
-        every debit merchant/currency pair with >= min_count charges in the
-        lookback window, with the raw chronological (date, amount) sequence
-        — the classification logic in server.py needs the actual sequence
-        to detect price-change runs, not just aggregate stats.
-        """
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-        conn = self._db()
-        rows = conn.execute(
-            "SELECT t.date, t.amount, t.currency, t.category_top, t.category_leaf, "
-            "       COALESCE(NULLIF(m.resolved_name, ''), t.description) AS merchant "
-            "FROM transactions t "
-            "LEFT JOIN merchants m ON t.description = m.raw_name "
-            "WHERE t.direction != 'CRDT' AND t.date >= ? "
-            "ORDER BY merchant, t.currency, t.date ASC",
-            (cutoff,),
-        ).fetchall()
-        conn.close()
-
-        groups: dict[tuple[str, str], dict] = {}
-        for date, amount, currency, category_top, category_leaf, merchant in rows:
-            key = (merchant, currency)
-            g = groups.setdefault(
-                key, {"merchant": merchant, "currency": currency, "charges": [], "categories": []}
-            )
-            g["charges"].append((date, amount))
-            g["categories"].append(category_leaf or category_top)
-
-        return [g for g in groups.values() if len(g["charges"]) >= min_count]
-
-    def get_recurring_statuses(self) -> dict[tuple[str, str], dict]:
-        """Bulk-read all recorded cancellation-confirmation statuses, keyed
-        (merchant, currency). One query — callers merge in Python rather
-        than querying per-merchant."""
-        conn = self._db()
-        rows = conn.execute(
-            "SELECT merchant, currency, status, confirmed_at FROM recurring_charge_status"
-        ).fetchall()
-        conn.close()
-        return {
-            (merchant, currency): {"status": status, "confirmed_at": confirmed_at}
-            for merchant, currency, status, confirmed_at in rows
-        }
-
-    _RECURRING_STATUSES = {"active", "cancelled", "unknown"}
-
-    def set_recurring_status(self, merchant: str, currency: str, status: str) -> None:
-        if status not in self._RECURRING_STATUSES:
-            raise ValueError(
-                f"Invalid status: {status!r}. Must be one of {sorted(self._RECURRING_STATUSES)}"
-            )
-        conn = self._db()
-        conn.execute(
-            "INSERT OR REPLACE INTO recurring_charge_status "
-            "(merchant, currency, status, confirmed_at) VALUES (?, ?, ?, ?)",
-            (merchant, currency, status, time.time()),
-        )
-        conn.commit()
-        conn.close()
 
     def current_month_window(self) -> tuple[str, str]:
         """(month_start, today) as ISO dates -- the single source of truth for
@@ -780,6 +895,14 @@ class Storage:
         return month_start, today
 
     def get_budget_status(self, agent_id: str = "finance") -> list[dict]:
+        """Returns plain dict rows (not BudgetStatusDTO) — pinned tests
+        (tests/test_budget_status_mid_level.py, tests/test_mixed_currency_no_blend.py,
+        tests/test_direction_null_undercount_bug.py) subscript/`in`-check the
+        raw return value directly, and test_mixed_currency_no_blend.py's
+        assert_no_blend() recursively isinstance(x, dict)-walks it — so this
+        stays dict-shaped. BudgetStatusDTO.to_dict() (see
+        slices/finance/dto.py) is still what builds each entry, reproducing
+        other_currency_amounts's conditional presence exactly."""
         month_start, today = self.current_month_window()
 
         # category_top/direction are now reliable columns (see the migration
@@ -838,23 +961,23 @@ class Storage:
                 status = "warning"
             else:
                 status = "over"
-            entry = {
-                "category":     cat_top,
-                "category_mid": cat_mid,
-                "spent":        spent,
-                "limit":        limit_amount,
-                "period":       period,
-                "percent":      percent,
-                "status":       status,
-            }
-            if others:
-                entry["other_currency_amounts"] = others
-            result.append(entry)
+
+            dto = BudgetStatusDTO(
+                category=cat_top,
+                category_mid=cat_mid,
+                spent=spent,
+                limit=limit_amount,
+                period=period,
+                percent=percent,
+                status=status,
+                other_currency_amounts=others or None,
+            )
+            result.append(dto.to_dict())
         return result
 
     # ── goals ────────────────────────────────────────────────────────────────
 
-    def get_goals(self, agent_id: str = "finance") -> list[dict]:
+    def get_goals(self, agent_id: str = "finance") -> list[GoalDTO]:
         conn = self._db()
         rows = conn.execute(
             "SELECT id, name, target_amount, current_amount, purpose, deadline, created_at, updated_at "
@@ -863,16 +986,10 @@ class Storage:
         ).fetchall()
         conn.close()
         return [
-            {
-                "id":             r[0],
-                "name":           r[1],
-                "target_amount":  r[2],
-                "current_amount": r[3],
-                "purpose":        r[4],
-                "deadline":       r[5],
-                "created_at":     r[6],
-                "updated_at":     r[7],
-            }
+            GoalDTO(
+                id=r[0], name=r[1], target_amount=r[2], current_amount=r[3],
+                purpose=r[4], deadline=r[5], created_at=r[6], updated_at=r[7],
+            )
             for r in rows
         ]
 
@@ -922,7 +1039,7 @@ class Storage:
         "savings_purpose", "savings_target", "savings_deadline", "budget_style",
     )
 
-    def get_onboarding(self, agent_id: str = "finance") -> dict | None:
+    def get_onboarding(self, agent_id: str = "finance") -> OnboardingDTO | None:
         conn = self._db()
         row = conn.execute(
             "SELECT stage, income, income_day, fixed_costs, savings_monthly, savings_purpose, "
@@ -939,19 +1056,19 @@ class Storage:
                 fixed_costs = json.loads(row[3])
             except (TypeError, ValueError):
                 fixed_costs = row[3]
-        return {
-            "stage":            row[0],
-            "income":           row[1],
-            "income_day":       row[2],
-            "fixed_costs":      fixed_costs,
-            "savings_monthly":  row[4],
-            "savings_purpose":  row[5],
-            "savings_target":   row[6],
-            "savings_deadline": row[7],
-            "budget_style":     row[8],
-            "completed_at":     row[9],
-            "updated_at":       row[10],
-        }
+        return OnboardingDTO(
+            stage=row[0],
+            income=row[1],
+            income_day=row[2],
+            fixed_costs=fixed_costs,
+            savings_monthly=row[4],
+            savings_purpose=row[5],
+            savings_target=row[6],
+            savings_deadline=row[7],
+            budget_style=row[8],
+            completed_at=row[9],
+            updated_at=row[10],
+        )
 
     def set_onboarding_stage(self, agent_id: str, stage: str, **kwargs) -> None:
         invalid = set(kwargs) - set(self._ONBOARDING_FIELDS)
@@ -960,7 +1077,8 @@ class Storage:
         if "fixed_costs" in kwargs and not isinstance(kwargs["fixed_costs"], str):
             kwargs["fixed_costs"] = json.dumps(kwargs["fixed_costs"], ensure_ascii=False)
 
-        existing = self.get_onboarding(agent_id) or {"budget_style": "honest"}
+        existing_dto = self.get_onboarding(agent_id)
+        existing: dict = existing_dto.model_dump() if existing_dto is not None else {"budget_style": "honest"}
         existing.update(kwargs)
 
         now = time.time()
@@ -1003,6 +1121,76 @@ class Storage:
         conn.commit()
         conn.close()
 
+    # ── recurring charges ────────────────────────────────────────────────────
+
+    def get_recurring_candidates(self, lookback_days: int = 180, min_count: int = 3) -> list[RecurringCandidateDTO]:
+        """
+        Return candidate merchants for recurring-charge classification:
+        every debit merchant/currency pair with >= min_count charges in the
+        lookback window, with the raw chronological (date, amount) sequence
+        — the classification logic in server.py needs the actual sequence
+        to detect price-change runs, not just aggregate stats.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT t.date, t.amount, t.currency, t.category_top, t.category_leaf, "
+            "       COALESCE(NULLIF(m.resolved_name, ''), t.description) AS merchant "
+            "FROM transactions t "
+            "LEFT JOIN merchants m ON t.description = m.raw_name "
+            "WHERE t.direction != 'CRDT' AND t.date >= ? "
+            "ORDER BY merchant, t.currency, t.date ASC",
+            (cutoff,),
+        ).fetchall()
+        conn.close()
+
+        groups: dict[tuple[str, str], dict] = {}
+        for date, amount, currency, category_top, category_leaf, merchant in rows:
+            key = (merchant, currency)
+            g = groups.setdefault(
+                key, {"merchant": merchant, "currency": currency, "charges": [], "categories": []}
+            )
+            g["charges"].append((date, amount))
+            g["categories"].append(category_leaf or category_top)
+
+        return [
+            RecurringCandidateDTO(
+                merchant=g["merchant"], currency=g["currency"], charges=g["charges"], categories=g["categories"]
+            )
+            for g in groups.values()
+            if len(g["charges"]) >= min_count
+        ]
+
+    def get_recurring_statuses(self) -> dict[tuple[str, str], RecurringStatusDTO]:
+        """Bulk-read all recorded cancellation-confirmation statuses, keyed
+        (merchant, currency). One query — callers merge in Python rather
+        than querying per-merchant."""
+        conn = self._db()
+        rows = conn.execute(
+            "SELECT merchant, currency, status, confirmed_at FROM recurring_charge_status"
+        ).fetchall()
+        conn.close()
+        return {
+            (merchant, currency): RecurringStatusDTO(status=status, confirmed_at=confirmed_at)
+            for merchant, currency, status, confirmed_at in rows
+        }
+
+    _RECURRING_STATUSES = {"active", "cancelled", "unknown"}
+
+    def set_recurring_status(self, merchant: str, currency: str, status: str) -> None:
+        if status not in self._RECURRING_STATUSES:
+            raise ValueError(
+                f"Invalid status: {status!r}. Must be one of {sorted(self._RECURRING_STATUSES)}"
+            )
+        conn = self._db()
+        conn.execute(
+            "INSERT OR REPLACE INTO recurring_charge_status "
+            "(merchant, currency, status, confirmed_at) VALUES (?, ?, ?, ?)",
+            (merchant, currency, status, time.time()),
+        )
+        conn.commit()
+        conn.close()
+
     # ── budget history ───────────────────────────────────────────────────────
 
     def record_budget_history(
@@ -1024,7 +1212,7 @@ class Storage:
         conn.commit()
         conn.close()
 
-    def get_budget_history(self, agent_id: str, category_top: str, n_periods: int = 3) -> list[dict]:
+    def get_budget_history(self, agent_id: str, category_top: str, n_periods: int = 3) -> list[BudgetHistoryEntryDTO]:
         conn = self._db()
         rows = conn.execute(
             "SELECT period, limit_amount, actual_amount, variance, created_at, "
@@ -1039,24 +1227,20 @@ class Storage:
         # Recorded nightly, so a single calendar month has many rows — keep
         # only the most recent (highest created_at) snapshot per month.
         seen_months: set[str] = set()
-        result = []
+        result: list[BudgetHistoryEntryDTO] = []
         for period, limit_amount, actual_amount, variance, created_at, month in rows:
             if month in seen_months:
                 continue
             seen_months.add(month)
-            result.append({
-                "month":         month,
-                "period":        period,
-                "limit_amount":  limit_amount,
-                "actual_amount": actual_amount,
-                "variance":      variance,
-                "created_at":    created_at,
-            })
+            result.append(BudgetHistoryEntryDTO(
+                month=month, period=period, limit_amount=limit_amount,
+                actual_amount=actual_amount, variance=variance, created_at=created_at,
+            ))
             if len(result) >= n_periods:
                 break
         return result
 
-    def get_overspend_patterns(self, agent_id: str, consecutive_months: int = 3) -> list[dict]:
+    def get_overspend_patterns(self, agent_id: str, consecutive_months: int = 3) -> list[OverspendPatternDTO]:
         conn = self._db()
         categories = conn.execute(
             "SELECT DISTINCT category_top FROM budget_history WHERE agent_id = ?",
@@ -1064,18 +1248,18 @@ class Storage:
         ).fetchall()
         conn.close()
 
-        patterns = []
+        patterns: list[OverspendPatternDTO] = []
         for (category_top,) in categories:
             history = self.get_budget_history(agent_id, category_top, n_periods=consecutive_months)
             if len(history) < consecutive_months:
                 continue
-            if all(h["variance"] > 0 for h in history):
-                patterns.append({
-                    "category_top":       category_top,
-                    "consecutive_months": consecutive_months,
-                    "months":             [h["month"] for h in history],
-                    "avg_variance":       round(sum(h["variance"] for h in history) / len(history), 2),
-                })
+            if all(h.variance > 0 for h in history):
+                patterns.append(OverspendPatternDTO(
+                    category_top=category_top,
+                    consecutive_months=consecutive_months,
+                    months=[h.month for h in history],
+                    avg_variance=round(sum(h.variance for h in history) / len(history), 2),
+                ))
         return patterns
 
     # ── tips ─────────────────────────────────────────────────────────────────
@@ -1121,7 +1305,7 @@ class Storage:
         conn.close()
         return tip_id
 
-    def get_tip_for_date(self, tip_date: str, agent_id: str = "finance") -> dict | None:
+    def get_tip_for_date(self, tip_date: str, agent_id: str = "finance") -> TipDTO | None:
         conn = self._db()
         row = conn.execute(
             "SELECT id, agent_id, created_at, tip_date, window_from, window_to, tip_text, "
@@ -1133,9 +1317,9 @@ class Storage:
         conn.close()
         if row is None:
             return None
-        return self._tip_row_to_dict(row)
+        return self._tip_row_to_dto(row)
 
-    def get_recent_tips_with_feedback(self, n: int = 10, agent_id: str = "finance") -> list[dict]:
+    def get_recent_tips_with_feedback(self, n: int = 10, agent_id: str = "finance") -> list[TipDTO]:
         conn = self._db()
         rows = conn.execute(
             "SELECT id, agent_id, created_at, tip_date, window_from, window_to, tip_text, "
@@ -1145,7 +1329,7 @@ class Storage:
             (agent_id, n),
         ).fetchall()
         conn.close()
-        return [self._tip_row_to_dict(row) for row in rows]
+        return [self._tip_row_to_dto(row) for row in rows]
 
     def get_rejected_subject_keys(self, since_days: int = 30, agent_id: str = "finance") -> set[str]:
         cutoff = time.time() - since_days * 86400
@@ -1190,7 +1374,10 @@ class Storage:
     def get_labeled_tips(self, agent_id: str = "finance") -> list[dict]:
         """Eval-set export query: every tip with feedback recorded, oldest
         first. No caller needs this yet — it exists so accumulated tips +
-        feedback can be exported as an evaluation dataset later."""
+        feedback can be exported as an evaluation dataset later. Returns a
+        narrower column subset than TipDTO (no id/agent_id/created_at/
+        tip_date/subject_key/category_top/feedback_source/feedback_at), so
+        it stays a plain dict rather than misrepresenting TipDTO's shape."""
         conn = self._db()
         rows = conn.execute(
             "SELECT tip_text, signals_json, based_on, window_from, window_to, model, "
@@ -1215,7 +1402,7 @@ class Storage:
             for r in rows
         ]
 
-    def get_all_tips_with_feedback(self, agent_id: str = "finance") -> list[dict]:
+    def get_all_tips_with_feedback(self, agent_id: str = "finance") -> list[TipDTO]:
         """Every tip row for the agent, any feedback_status (including
         pending), full columns — unlike get_labeled_tips() (feedback-only
         subset of columns, excludes pending) or get_recent_tips_with_feedback()
@@ -1229,122 +1416,44 @@ class Storage:
             (agent_id,),
         ).fetchall()
         conn.close()
-        return [self._tip_row_to_dict(row) for row in rows]
+        return [self._tip_row_to_dto(row) for row in rows]
 
     @staticmethod
-    def _tip_row_to_dict(row) -> dict:
-        return {
-            "id":                   row[0],
-            "agent_id":             row[1],
-            "created_at":           row[2],
-            "tip_date":             row[3],
-            "window_from":          row[4],
-            "window_to":            row[5],
-            "tip_text":             row[6],
-            "subject_key":          row[7],
-            "category_top":         row[8],
-            "based_on":             row[9],
-            "signals_json":         row[10],
-            "model":                row[11],
-            "prompt_version":       row[12],
-            "feedback_status":      row[13],
-            "feedback_reason_code": row[14],
-            "feedback_reason_text": row[15],
-            "feedback_source":      row[16],
-            "feedback_at":          row[17],
-        }
-
-    # ── provider keys ────────────────────────────────────────────────────────
-
-    def get_provider_key(self, provider: str) -> str | None:
-        conn = self._db()
-        row = conn.execute(
-            "SELECT api_key FROM provider_keys WHERE provider = ?", (provider,)
-        ).fetchone()
-        conn.close()
-        return row[0] if row else None
-
-    def set_provider_key(self, provider: str, api_key: str) -> None:
-        now = time.time()
-        conn = self._db()
-        conn.execute(
-            "INSERT INTO provider_keys (provider, api_key, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(provider) DO UPDATE SET api_key=excluded.api_key, updated_at=excluded.updated_at",
-            (provider, api_key, now, now),
+    def _tip_row_to_dto(row) -> TipDTO:
+        return TipDTO(
+            id=row[0],
+            agent_id=row[1],
+            created_at=row[2],
+            tip_date=row[3],
+            window_from=row[4],
+            window_to=row[5],
+            tip_text=row[6],
+            subject_key=row[7],
+            category_top=row[8],
+            based_on=row[9],
+            signals_json=row[10],
+            model=row[11],
+            prompt_version=row[12],
+            feedback_status=row[13],
+            feedback_reason_code=row[14],
+            feedback_reason_text=row[15],
+            feedback_source=row[16],
+            feedback_at=row[17],
         )
-        conn.commit()
-        conn.close()
 
-    def delete_provider_key(self, provider: str) -> None:
-        conn = self._db()
-        conn.execute("DELETE FROM provider_keys WHERE provider = ?", (provider,))
-        conn.commit()
-        conn.close()
 
-    def list_providers_with_keys(self) -> set[str]:
-        conn = self._db()
-        rows = conn.execute("SELECT provider FROM provider_keys").fetchall()
-        conn.close()
-        return {row[0] for row in rows}
+class Storage(FinanceStorage):
+    """The combined kernel + finance storage surface. Every current caller
+    imports this single class (`from jyske_mcp.storage import Storage`) and
+    calls kernel and finance methods on one instance — this composition
+    preserves that exactly while the two surfaces above are internally
+    separated per .agent/epics/vsa-restructure-blueprint.md §2. Deliverable
+    #6 physically relocates KernelStorage to kernel/storage.py and
+    FinanceStorage to slices/finance/storage.py; Storage itself (or its
+    equivalent) is expected to keep composing both so this import path
+    keeps working, per that deliverable's own scope."""
 
-    # ── agents ───────────────────────────────────────────────────────────────
-
-    def get_agents(self) -> list[dict]:
-        conn = self._db()
-        rows = conn.execute(
-            "SELECT id, name, description, model, created_at, updated_at FROM agents ORDER BY id"
-        ).fetchall()
-        conn.close()
-        return [
-            {
-                "id":          r[0],
-                "name":        r[1],
-                "description": r[2],
-                "model":       r[3],
-                "created_at":  r[4],
-                "updated_at":  r[5],
-            }
-            for r in rows
-        ]
-
-    def get_agent(self, agent_id: str) -> dict | None:
-        conn = self._db()
-        row = conn.execute(
-            "SELECT id, name, description, model, created_at, updated_at FROM agents WHERE id = ?",
-            (agent_id,),
-        ).fetchone()
-        conn.close()
-        if row is None:
-            return None
-        return {
-            "id":          row[0],
-            "name":        row[1],
-            "description": row[2],
-            "model":       row[3],
-            "created_at":  row[4],
-            "updated_at":  row[5],
-        }
-
-    def set_agent_model(self, agent_id: str, model: str) -> None:
-        conn = self._db()
-        conn.execute(
-            "UPDATE agents SET model = ?, updated_at = ? WHERE id = ?",
-            (model, time.time(), agent_id),
-        )
-        conn.commit()
-        conn.close()
-
-    def _db(self):
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        os.chmod(CONFIG_DIR, 0o700)
-        conn = sqlite3.connect(str(_CACHE_DB))
-        # Unconditional, not just on first creation — a prior run could have
-        # left cache.db with looser permissions (e.g. restored from a backup,
-        # or created before this hardening existed), so re-assert 0600 on
-        # every connection rather than gating on is_new.
-        os.chmod(_CACHE_DB, 0o600)
-        return conn
+    pass
 
 
 def _check_schema_version() -> None:
