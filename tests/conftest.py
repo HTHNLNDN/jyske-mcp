@@ -248,7 +248,7 @@ def full_schema_storage(monkeypatch, tmp_path):
     jyske_mcp.kernel.storage, which every Storage/FinanceStorage/
     KernelStorage instance inherits) re-read these at call time, so this
     transparently redirects every such instance (including
-    jyske_mcp.mcp.server's and jyske_mcp.web.app's module-level ones) for
+    jyske_mcp.slices.finance.tools's module-level one) for
     the duration of the test.
     """
     import jyske_mcp.kernel.storage as storage_module

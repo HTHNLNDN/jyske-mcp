@@ -1,6 +1,6 @@
 """
 Characterization tests (golden master) for the three MCP aggregation tools
-in jyske_mcp/mcp/server.py: get_spending, compare_spending, goal_pace.
+in jyske_mcp/slices/finance/tools.py: get_spending, compare_spending, goal_pace.
 Called directly as functions (never through FastMCP transport) per this
 suite's existing convention (see tests/test_goal_pace.py,
 tests/test_mixed_currency_no_blend.py).
@@ -32,7 +32,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import jyske_mcp.kernel.storage as storage_module
-import jyske_mcp.mcp.server as server
+import jyske_mcp.slices.finance.tools as server
 
 
 def _insert_tx(*, category_top, category_mid, amount, currency, day, direction="DBIT", account_uid="acc1"):

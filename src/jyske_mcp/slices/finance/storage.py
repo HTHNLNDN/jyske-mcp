@@ -594,7 +594,7 @@ class FinanceStorage(KernelStorage):
         agent_id: str = "finance",
     ) -> int:
         """INSERT a new tip row, returning its id. UNIQUE(agent_id, tip_date)
-        is the DB-level backstop against duplicates — the caller (jyske_mcp/jobs/tips.py)
+        is the DB-level backstop against duplicates — the caller (jyske_mcp/slices/finance/tips.py)
         already checks get_tip_for_date first, but this raises
         sqlite3.IntegrityError instead of silently duplicating if that guard
         is ever bypassed or racing."""

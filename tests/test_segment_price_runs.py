@@ -1,15 +1,16 @@
 """
-Unit tests for jyske_mcp.mcp.server._segment_price_runs (and the
-_segment_runs/_drop_interior_noise/_merge_adjacent_runs pipeline it composes)
-— the price-run segmentation used by recurring-charge classification to
-tolerate a one-time subscription price change without destroying the whole
-history's "stability", while folding a single stray noise charge into its
-surrounding run instead of treating it as a real price change.
+Unit tests for jyske_mcp.slices.finance.recurring._segment_price_runs (and
+the _segment_runs/_drop_interior_noise/_merge_adjacent_runs pipeline it
+composes) — the price-run segmentation used by recurring-charge
+classification to tolerate a one-time subscription price change without
+destroying the whole history's "stability", while folding a single stray
+noise charge into its surrounding run instead of treating it as a real
+price change.
 
 Each charge is a (date, amount) tuple, chronologically ordered, exactly as
 Storage.get_recurring_candidates() produces them.
 """
-from jyske_mcp.mcp.server import (
+from jyske_mcp.slices.finance.recurring import (
     _segment_price_runs,
     _drop_interior_noise,
     _merge_adjacent_runs,

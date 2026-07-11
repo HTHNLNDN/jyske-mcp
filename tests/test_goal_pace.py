@@ -1,12 +1,13 @@
 """
-Unit tests for the goal_pace MCP tool (jyske_mcp/mcp/server.py) — pacing math
+Unit tests for the goal_pace MCP tool (jyske_mcp/slices/finance/tools.py) —
+pacing math
 (pct_complete/status/required_daily/required_monthly/projected_completion_date)
 computed over goals read from Storage.get_goals().
 
 Uses a real temporary SQLite DB with the `goals` table DDL from
 migrations/versions/aa1665106662_add_goals_table.py — Storage no longer
 creates tables itself, so the fixture must. Both a fresh Storage() and
-jyske_mcp.mcp.server's module-global `storage` read the same DB, since
+jyske_mcp.slices.finance.tools's module-global `storage` read the same DB, since
 _db() re-reads storage_module._CACHE_DB on every call — monkeypatching that
 global (and CONFIG_DIR) is enough to redirect both (same pattern as
 tests/test_mixed_currency_no_blend.py).
@@ -86,7 +87,7 @@ def _insert_goal(
 
 def _call_goal_pace(goal_id: int = 0):
     import json
-    import jyske_mcp.mcp.server as server
+    import jyske_mcp.slices.finance.tools as server
 
     return json.loads(server.goal_pace(goal_id=goal_id))
 

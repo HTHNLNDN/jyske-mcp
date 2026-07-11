@@ -20,7 +20,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-jyske_mcp = ["kernel/data/*.json", "prompts/*.md"]
+jyske_mcp = ["kernel/data/*.json", "slices/finance/*.md"]
 
 [tool.importlinter]
 root_package = "jyske_mcp"
@@ -41,6 +41,30 @@ name = "platform -> slices -> kernel layering"
 type = "layers"
 layers = ["platform", "slices", "kernel"]
 containers = ["jyske_mcp"]
+
+# 4th contract, activated at deliverable #7b (blueprint §5): jyske_mcp.web
+# (platform, until the platform/ package reorg at #10) may only reach the
+# finance slice through its public api.py — never its internals. Enumerated
+# so a new internal module is a deliberate add to this list, not a silent
+# gap. allow_indirect_imports=true restricts the check to DIRECT imports —
+# api.py itself is expected (and allowed) to import these internals; what's
+# forbidden is jyske_mcp.web reaching past api.py to import them itself.
+[[tool.importlinter.contracts]]
+name = "platform imports finance only via api"
+type = "forbidden"
+source_modules = ["jyske_mcp.web"]
+forbidden_modules = [
+    "jyske_mcp.slices.finance.storage",
+    "jyske_mcp.slices.finance.dto",
+    "jyske_mcp.slices.finance.tools",
+    "jyske_mcp.slices.finance.recurring",
+    "jyske_mcp.slices.finance.spending",
+    "jyske_mcp.slices.finance.registry",
+    "jyske_mcp.slices.finance.routes",
+    "jyske_mcp.slices.finance.tips",
+    "jyske_mcp.slices.finance.evals",
+]
+allow_indirect_imports = "true"
 
 # mypy — strict scoped to seam modules only. jyske_mcp.storage was physically
 # split at deliverable #6 (KernelStorage -> kernel/storage.py, FinanceStorage

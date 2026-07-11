@@ -1,11 +1,12 @@
 """
-Characterization tests for jyske_mcp/web/app.py's _run_tool — the chat
-tool-call dispatcher that maps an LLM-issued tool name + JSON args to one
-of the 23 MCP tool functions. No litellm/LLM call happens anywhere in this
-file (_run_tool itself never calls an LLM — the 23 functions it dispatches
-to only ever touch local SQLite via Storage, per the "MCP tools never call
-Enable Banking" rule), so there's nothing to mock there; the zero-cost
-constraint is satisfied simply by never invoking chat()/chat_completion.
+Characterization tests for jyske_mcp/slices/finance/registry.py's run_tool —
+the chat tool-call dispatcher that maps an LLM-issued tool name + JSON args
+to one of the 23 MCP tool functions. No litellm/LLM call happens anywhere in
+this file (run_tool itself never calls an LLM — the 23 functions it
+dispatches to only ever touch local SQLite via Storage, per the "MCP tools
+never call Enable Banking" rule), so there's nothing to mock there; the
+zero-cost constraint is satisfied simply by never invoking
+chat()/chat_completion.
 
 Two layers of coverage, deliberately kept separate:
 
@@ -14,13 +15,13 @@ Two layers of coverage, deliberately kept separate:
      input dict forwarded exactly as-is (or, for the 9 zero-arg tools,
      proven that the function is called with NO arguments and any input
      keys are silently ignored — current behavior, worth pinning since a
-     VSA-era registry refactor (epic deliverable #8) could easily change
+     VSA-era registry unification (epic deliverable #8) could easily change
      this). This is what most precisely answers "dispatches to the right
      function" and is immune to any real function's own business-logic
      changes.
 
   2. A real end-to-end smoke test (full_schema_storage, no mocks) proving
-     all 23 really execute without the _run_tool try/except's "Tool error
+     all 23 really execute without run_tool's try/except's "Tool error
      (...)" fallback firing, against a small seeded dataset covering every
      tool's data dependency.
 """
@@ -28,10 +29,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import jyske_mcp.web.app as app_module
+import jyske_mcp.slices.finance.registry as registry_module
 
-# Tools whose _run_tool lambda calls fn() with no arguments, ignoring
-# whatever `inputs` dict was passed (see jyske_mcp/web/app.py's dispatch table).
+# Tools whose run_tool lambda calls fn() with no arguments, ignoring
+# whatever `inputs` dict was passed (see
+# jyske_mcp/slices/finance/registry.py's dispatch table).
 ZERO_ARG_TOOLS = [
     "get_memory",
     "list_accounts",
@@ -44,8 +46,8 @@ ZERO_ARG_TOOLS = [
     "get_current_tip",
 ]
 
-# Tools whose _run_tool lambda calls fn(**inputs) — the exact kwargs each
-# needs, matching jyske_mcp/mcp/server.py's real signatures.
+# Tools whose run_tool lambda calls fn(**inputs) — the exact kwargs each
+# needs, matching jyske_mcp/slices/finance/tools.py's real signatures.
 KWARG_TOOLS = {
     "get_balances": {"account_uid": "acc-1"},
     "get_transactions": {"account_uid": "acc-1", "date_from": "2020-01-01", "date_to": "2020-01-31"},
@@ -68,19 +70,19 @@ ALL_23_TOOLS = ZERO_ARG_TOOLS + list(KWARG_TOOLS)
 
 def test_all_23_tools_enumerated_match_the_tools_schema_list():
     """Sanity check on this file's own fixtures, and a cheap pin that TOOLS
-    (the LiteLLM-facing schema list) and _run_tool's dispatch table stay in
+    (the LiteLLM-facing schema list) and run_tool's dispatch table stay in
     sync at 23 entries with matching names — exactly the duplication epic
     deliverable #8 plans to collapse into one registry."""
     assert len(ALL_23_TOOLS) == 23
-    assert set(ALL_23_TOOLS) == {t["name"] for t in app_module.TOOLS}
+    assert set(ALL_23_TOOLS) == {t["name"] for t in registry_module.TOOLS}
 
 
 @pytest.mark.parametrize("tool_name", ZERO_ARG_TOOLS)
 def test_zero_arg_tool_dispatches_with_no_args_and_ignores_inputs(monkeypatch, tool_name):
     mock = MagicMock(return_value=f"mocked-{tool_name}")
-    monkeypatch.setattr(app_module, tool_name, mock)
+    monkeypatch.setattr(registry_module, tool_name, mock)
 
-    result = app_module._run_tool(tool_name, {"unexpected": "should be ignored"})
+    result = registry_module.run_tool(tool_name, {"unexpected": "should be ignored"})
 
     mock.assert_called_once_with()
     assert result == f"mocked-{tool_name}"
@@ -89,16 +91,16 @@ def test_zero_arg_tool_dispatches_with_no_args_and_ignores_inputs(monkeypatch, t
 @pytest.mark.parametrize("tool_name,inputs", KWARG_TOOLS.items())
 def test_kwarg_tool_dispatches_with_forwarded_inputs(monkeypatch, tool_name, inputs):
     mock = MagicMock(return_value=f"mocked-{tool_name}")
-    monkeypatch.setattr(app_module, tool_name, mock)
+    monkeypatch.setattr(registry_module, tool_name, mock)
 
-    result = app_module._run_tool(tool_name, inputs)
+    result = registry_module.run_tool(tool_name, inputs)
 
     mock.assert_called_once_with(**inputs)
     assert result == f"mocked-{tool_name}"
 
 
 def test_unknown_tool_returns_error_string_without_raising():
-    result = app_module._run_tool("not_a_real_tool", {})
+    result = registry_module.run_tool("not_a_real_tool", {})
     assert result == "Unknown tool: not_a_real_tool"
 
 
@@ -106,9 +108,9 @@ def test_tool_exception_is_caught_and_formatted_not_raised(monkeypatch):
     def _boom():
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(app_module, "get_memory", _boom)
+    monkeypatch.setattr(registry_module, "get_memory", _boom)
 
-    result = app_module._run_tool("get_memory", {})
+    result = registry_module.run_tool("get_memory", {})
 
     assert result == "Tool error (get_memory): kaboom"
 
@@ -165,7 +167,7 @@ def _seed_for_smoke_test(storage):
 def test_zero_arg_tool_executes_without_error_against_real_storage(full_schema_storage, tool_name):
     _seed_for_smoke_test(full_schema_storage)
 
-    result = app_module._run_tool(tool_name, {})
+    result = registry_module.run_tool(tool_name, {})
 
     assert not str(result).startswith("Tool error ("), f"{tool_name} raised: {result}"
 
@@ -174,6 +176,6 @@ def test_zero_arg_tool_executes_without_error_against_real_storage(full_schema_s
 def test_kwarg_tool_executes_without_error_against_real_storage(full_schema_storage, tool_name, inputs):
     _seed_for_smoke_test(full_schema_storage)
 
-    result = app_module._run_tool(tool_name, inputs)
+    result = registry_module.run_tool(tool_name, inputs)
 
     assert not str(result).startswith("Tool error ("), f"{tool_name} raised: {result}"

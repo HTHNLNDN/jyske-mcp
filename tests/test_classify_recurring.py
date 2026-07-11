@@ -1,6 +1,6 @@
 """
-Unit tests for jyske_mcp.mcp.server._classify_recurring — classifies a single
-merchant candidate (see Storage.get_recurring_candidates) as fixed_recurring
+Unit tests for jyske_mcp.slices.finance.recurring._classify_recurring —
+classifies a single merchant candidate (see Storage.get_recurring_candidates) as fixed_recurring
 (stable price, regular cadence) and/or frequent_merchant, or returns None.
 
 `candidate` fixtures are hand-built to match get_recurring_candidates()'s
@@ -11,7 +11,7 @@ passed in explicitly (this is a pure function, no wall-clock dependency).
 """
 from datetime import datetime, timezone
 
-from jyske_mcp.mcp.server import _classify_recurring
+from jyske_mcp.slices.finance.recurring import _classify_recurring
 
 
 def _candidate(merchant="Netflix", currency="DKK", charges=None, categories=None):

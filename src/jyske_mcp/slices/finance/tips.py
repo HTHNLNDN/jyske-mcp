@@ -1,15 +1,20 @@
 """
 Nightly "financial tip of the day" generator. Analyzes the past 3 months of
-spending data (via the same deterministic aggregation tools server.py exposes
+spending data (via the same deterministic aggregation tools tools.py exposes
 to chat), asks the main configured LLM for exactly ONE specific, actionable
 tip grounded in a real number/merchant/category, and persists it — along with
 exactly what data justified it — so accumulated tips + feedback become a
 genuine evaluation dataset over time.
 
 Registered from jyske_mcp/jobs/scheduler.py at 04:30, after the 03:00 sync and 04:00
-evals jobs. Mirrors jyske_mcp/jobs/evals.py's structure (dotenv/path/logging setup,
+evals jobs (via jyske_mcp.slices.finance.api.run_tips). Mirrors
+jyske_mcp/slices/finance/evals.py's structure (dotenv/path/logging setup,
 never-raise entrypoint) — see that module for the reasoning behind each of
 those choices.
+
+Relocated out of jyske_mcp/jobs/tips.py at epic deliverable #7a
+(.agent/epics/vsa-restructure-blueprint.md §4/§6) — behavior-preserving move,
+no logic changes.
 """
 
 import json
@@ -39,11 +44,11 @@ from jyske_mcp.kernel.llm import LLMNotConfiguredError, resolve_agent_llm, simpl
 from jyske_mcp.slices.finance.storage import Storage
 from jyske_mcp.slices.finance.dto import TipDTO
 
-# server.py's tool functions are plain Python functions returning JSON
-# strings — same import-and-call pattern app.py already uses for _run_tool,
-# not an MCP client round-trip. server.py itself never calls Enable Banking
-# directly, so this stays within the "server.py reads from SQLite only" rule.
-from jyske_mcp.mcp.server import (
+# tools.py's tool functions are plain Python functions returning JSON
+# strings — same import-and-call pattern the chat registry uses, not an MCP
+# client round-trip. tools.py itself never calls Enable Banking directly, so
+# this stays within the "tools.py reads from SQLite only" rule.
+from jyske_mcp.slices.finance.tools import (
     get_spending,
     compare_spending,
     recurring_charges,

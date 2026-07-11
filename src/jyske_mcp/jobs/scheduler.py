@@ -23,9 +23,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from jyske_mcp.kernel.sync import run_sync
-from jyske_mcp.jobs.evals import run_evals
-from jyske_mcp.jobs.tips import run_tips
-from jyske_mcp.slices.finance.api import snapshot_budget_history
+from jyske_mcp.slices.finance.api import run_evals, run_tips, snapshot_budget_history
 
 logging.basicConfig(
     level=logging.INFO,

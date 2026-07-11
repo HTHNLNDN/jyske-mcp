@@ -1,6 +1,6 @@
 """
-Unit tests for jyske_mcp.mcp.server._compute_proration — the pure proration
-math extracted out of compare_spending (see that function's docstring/
+Unit tests for jyske_mcp.slices.finance.spending._compute_proration — the
+pure proration math extracted out of compare_spending (see that function's docstring/
 comments). This helper decides whether `month` is the still-in-progress
 current calendar month relative to `now`, and if so, what date window
 `baseline_month` should be truncated to for an apples-to-apples comparison,
@@ -16,7 +16,7 @@ this file only isolates the proration math itself.
 """
 from datetime import datetime, timezone
 
-from jyske_mcp.mcp.server import _compute_proration
+from jyske_mcp.slices.finance.spending import _compute_proration
 
 
 def test_not_in_progress_when_month_is_not_current_calendar_month():

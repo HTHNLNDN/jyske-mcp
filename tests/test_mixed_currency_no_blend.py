@@ -1,6 +1,6 @@
 """
 Covers the currency de-blending fix across get_spending, compare_spending
-(jyske_mcp/mcp/server.py) and get_budget_status (jyske_mcp/slices/finance/storage.py).
+(jyske_mcp/slices/finance/tools.py) and get_budget_status (jyske_mcp/slices/finance/storage.py).
 
 Previously each of these summed `amount` across rows regardless of
 `currency` — a mixed DKK+EUR transaction set would silently blend into one
@@ -17,8 +17,8 @@ migrations/versions/64bed3498587_initial_schema.py plus the columns added by
 2408de69fc02_add_agent_id_to_budgets_and_summaries.py (agent_id) — Storage no
 longer creates tables itself (see jyske_mcp/kernel/storage.py's
 _check_schema_version), so the fixture must create them. Both a fresh
-Storage() and jyske_mcp.mcp.server's module-global `storage` read the same
-DB, since _db() (defined in jyske_mcp.kernel.storage) re-reads
+Storage() and jyske_mcp.slices.finance.tools's module-global `storage` read
+the same DB, since _db() (defined in jyske_mcp.kernel.storage) re-reads
 storage_module._CACHE_DB on every call — monkeypatching that global (and
 CONFIG_DIR) is enough to redirect both.
 """
@@ -133,7 +133,7 @@ def assert_no_blend(payload) -> None:
 
 
 def test_get_spending_total_is_per_currency_dict(storage, monkeypatch):
-    import jyske_mcp.mcp.server as server
+    import jyske_mcp.slices.finance.tools as server
 
     day = _this_month_day(storage)
     _insert_tx(storage, category_top="Food & Dining", category_mid="Restaurants",
@@ -153,7 +153,7 @@ def test_get_spending_total_is_per_currency_dict(storage, monkeypatch):
 
 
 def test_compare_spending_totals_keyed_by_currency(storage):
-    import jyske_mcp.mcp.server as server
+    import jyske_mcp.slices.finance.tools as server
 
     day = _this_month_day(storage)
     baseline_day = _prev_month_day(storage)

@@ -19,8 +19,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from jyske_mcp.kernel.config import ENV_FILE, ROOT_DIR, CHAT_LOG_FILE, secure_config_files, secure_rotating_handler
-from jyske_mcp.slices.finance.storage import Storage, PRIMARY_CURRENCY
-from jyske_mcp.kernel.categorizer import category_tree
+from jyske_mcp.kernel.storage import KernelStorage
 from jyske_mcp.kernel import consent as consent_lib
 from jyske_mcp.kernel import scheduler_client
 from jyske_mcp.kernel.model_catalog import all_model_ids, load_catalog
@@ -38,30 +37,17 @@ from jyske_mcp.kernel.llm import (
 
 load_dotenv(ENV_FILE)
 
-from jyske_mcp.mcp.server import (
-    list_accounts,
-    get_balances,
-    get_transactions,
-    categorize_transaction,
-    get_sync_status,
-    get_memory,
-    update_memory,
-    set_budget,
-    get_budget_status,
-    get_goals,
-    set_goal,
-    update_goal_progress,
-    get_onboarding_status,
-    set_onboarding_stage,
-    complete_onboarding,
-    get_overspend_patterns,
-    get_spending,
-    compare_spending,
-    goal_pace,
-    recurring_charges,
-    confirm_recurring_status,
-    get_current_tip,
-    submit_tip_feedback,
+# The chat loop's system prompt + tool schema/dispatch, the finance HTTP
+# routes (mounted below), and the finance portion of /audit/data all come
+# from the finance slice's public api.py — platform never reaches into
+# slice internals for these (see .agent/epics/vsa-restructure-blueprint.md
+# §4/§6).
+from jyske_mcp.slices.finance.api import (
+    PROMPT as SYSTEM_PROMPT,
+    LITELLM_TOOLS,
+    run_tool,
+    router as finance_router,
+    audit_section as finance_audit_section,
 )
 
 APP_PIN = os.environ["APP_PIN"]
@@ -76,9 +62,7 @@ _lockout_until: float = 0.0
 MAX_ATTEMPTS = 3
 LOCKOUT_SECONDS = 60
 
-_pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/jyske_mcp/
 _dir = str(ROOT_DIR)  # repo root — static/ and the frontend build live here, not in the package
-SYSTEM_PROMPT = open(os.path.join(_pkg_dir, "prompts", "system_prompt.md")).read()
 
 # Built Vue frontend (produced by `make build` → frontend/vite.config.js outDir).
 DIST_DIR = os.path.join(_dir, "static", "dist")
@@ -102,458 +86,6 @@ def _setup_chat_log() -> logging.Logger:
 secure_config_files()
 _chat_log = _setup_chat_log()
 
-TOOLS = [
-    {
-        "name": "get_memory",
-        "description": (
-            "Always call this at the start of every session.\n"
-            "Returns the user profile (goals, preferences, known patterns)\n"
-            "and the last 3 session summaries in a compact format."
-        ),
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "list_accounts",
-        "description": "List all bank accounts from the active consent session.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_balances",
-        "description": (
-            "Get balances for one or all accounts.\n"
-            "Leave account_uid empty to fetch all accounts.\n"
-            "Use list_accounts to find account UIDs."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "account_uid": {
-                    "type": "string",
-                    "description": "Account UID to fetch balances for. Leave empty for all accounts.",
-                }
-            },
-        },
-    },
-    {
-        "name": "get_transactions",
-        "description": (
-            "Get transactions for an account.\n"
-            "Use list_accounts to find account UIDs.\n"
-            "date_from and date_to are optional ISO dates (YYYY-MM-DD); defaults to last 30 days."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "account_uid": {
-                    "type": "string",
-                    "description": "Account UID to fetch transactions for.",
-                },
-                "date_from": {
-                    "type": "string",
-                    "description": "Start date in ISO format YYYY-MM-DD.",
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "End date in ISO format YYYY-MM-DD.",
-                },
-            },
-            "required": ["account_uid"],
-        },
-    },
-    {
-        "name": "categorize_transaction",
-        "description": (
-            "Categorize a merchant by name and optional MCC code.\n\n"
-            "Two-step flow:\n"
-            "  - Call without llm_category: tries merchant cache then MCC lookup.\n"
-            '    Returns the category on hit, or {"needs_llm": true, "raw_name": ...}\n'
-            "    to signal that Claude should determine the category and call again.\n"
-            '  - Call with llm_category (format "Top > Mid > Leaf"): stores the\n'
-            "    LLM-derived category and returns it."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "raw_name": {
-                    "type": "string",
-                    "description": "Raw merchant name from transaction.",
-                },
-                "mcc": {
-                    "type": "string",
-                    "description": "Optional merchant category code.",
-                },
-                "llm_category": {
-                    "type": "string",
-                    "description": "Optional LLM-derived category in 'Top > Mid > Leaf' format.",
-                },
-            },
-            "required": ["raw_name"],
-        },
-    },
-    {
-        "name": "get_sync_status",
-        "description": "Returns when data was last synced. Call this as part of every opening brief.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_budget",
-        "description": (
-            "Set a spending budget for a category.\n"
-            "category must be a top-level category name from the taxonomy.\n"
-            "period defaults to 'monthly'. Replaces any existing budget for that category+period."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "Top-level category name (e.g. 'Food & Dining').",
-                },
-                "limit_amount": {
-                    "type": "number",
-                    "description": "Spending limit for the period.",
-                },
-                "period": {
-                    "type": "string",
-                    "description": "Budget period — 'monthly' (default) or 'weekly'.",
-                },
-            },
-            "required": ["category", "limit_amount"],
-        },
-    },
-    {
-        "name": "get_budget_status",
-        "description": "Get current budget status. Always call this as part of the opening brief.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "update_memory",
-        "description": (
-            "Always call this at the end of every session.\n"
-            "session_summary: 2-3 sentence plain language summary of what happened this session.\n"
-            "profile_updates: JSON string of profile keys to update. Valid keys:\n"
-            "  - 'preferences': how user likes data presented, language preference, categories they care about\n"
-            "  - 'patterns': recurring behaviors or anomalies worth remembering long-term\n"
-            "  - 'pending': things flagged but not resolved, awaiting follow-up next session\n"
-            "Goals are no longer stored here — use set_goal / update_goal_progress.\n"
-            "Only include keys that actually changed this session."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "session_summary": {
-                    "type": "string",
-                    "description": "2-3 sentence summary of the session.",
-                },
-                "profile_updates": {
-                    "type": "string",
-                    "description": "JSON string of profile keys to update.",
-                },
-            },
-            "required": ["session_summary"],
-        },
-    },
-    {
-        "name": "get_goals",
-        "description": "Get all active goals with progress.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_goal",
-        "description": "Create a new savings or spending goal.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Short name for the goal.",
-                },
-                "target_amount": {
-                    "type": "number",
-                    "description": "Amount to reach.",
-                },
-                "purpose": {
-                    "type": "string",
-                    "description": "What the goal is for.",
-                },
-                "deadline": {
-                    "type": "string",
-                    "description": "Target date for the goal (ISO date or free text).",
-                },
-            },
-            "required": ["name", "target_amount", "purpose", "deadline"],
-        },
-    },
-    {
-        "name": "update_goal_progress",
-        "description": "Update progress on a goal.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "goal_id": {
-                    "type": "integer",
-                    "description": "ID of the goal to update.",
-                },
-                "current_amount": {
-                    "type": "number",
-                    "description": "New current progress amount.",
-                },
-            },
-            "required": ["goal_id", "current_amount"],
-        },
-    },
-    {
-        "name": "get_onboarding_status",
-        "description": "Check if budget onboarding is complete. Returns current stage if not.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_onboarding_stage",
-        "description": (
-            "Record progress through budget onboarding. Call once per stage as the user answers.\n"
-            "Only pass the fields relevant to the stage just completed; stage moves the\n"
-            "onboarding record to the next step ('income' -> 'fixed_costs' -> 'savings' -> 'style' -> 'complete')."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "stage": {
-                    "type": "string",
-                    "description": "Next onboarding stage: 'fixed_costs', 'savings', 'style', or 'complete'.",
-                },
-                "income": {
-                    "type": "number",
-                    "description": "Take-home income amount.",
-                },
-                "income_day": {
-                    "type": "integer",
-                    "description": "Day of month income usually lands.",
-                },
-                "fixed_costs": {
-                    "type": "string",
-                    "description": "Recurring non-negotiable costs, as free text or JSON.",
-                },
-                "savings_monthly": {
-                    "type": "number",
-                    "description": "Amount to save per month toward the goal.",
-                },
-                "savings_purpose": {
-                    "type": "string",
-                    "description": "What the savings are for.",
-                },
-                "savings_target": {
-                    "type": "number",
-                    "description": "Total savings target amount.",
-                },
-                "savings_deadline": {
-                    "type": "string",
-                    "description": "Target date for the savings goal.",
-                },
-                "budget_style": {
-                    "type": "string",
-                    "description": "How blunt the user wants budget talk to be, e.g. 'honest' or 'gentle'.",
-                },
-            },
-            "required": ["stage"],
-        },
-    },
-    {
-        "name": "complete_onboarding",
-        "description": "Mark budget onboarding as complete.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_overspend_patterns",
-        "description": "Returns categories overspent 3+ consecutive months. Call monthly.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_spending",
-        "description": (
-            "Sum spending (debits only) between two ISO dates.\n"
-            "Defaults date_from/date_to to the current calendar month if left empty.\n"
-            "Use this instead of summing a get_transactions listing by hand."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "date_from": {
-                    "type": "string",
-                    "description": "Start date in ISO format YYYY-MM-DD. Defaults to the 1st of the current month.",
-                },
-                "date_to": {
-                    "type": "string",
-                    "description": "End date in ISO format YYYY-MM-DD. Defaults to today.",
-                },
-                "category": {
-                    "type": "string",
-                    "description": "Top-level category name to narrow the sum to. Leave empty for all categories.",
-                },
-                "group_by": {
-                    "type": "string",
-                    "description": "'category' (default), 'mid', 'month', or 'none'.",
-                },
-                "account_uid": {
-                    "type": "string",
-                    "description": "Account UID to narrow the sum to. Leave empty for all accounts.",
-                },
-            },
-        },
-    },
-    {
-        "name": "compare_spending",
-        "description": (
-            "Compare total spending in one month against a baseline month (both 'YYYY-MM').\n"
-            "Defaults month to the current calendar month and baseline_month to the month before it.\n"
-            "Use this instead of eyeballing two get_transactions listings."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "month": {
-                    "type": "string",
-                    "description": "Month to compare, 'YYYY-MM'. Defaults to the current month.",
-                },
-                "baseline_month": {
-                    "type": "string",
-                    "description": "Baseline month, 'YYYY-MM'. Defaults to the month before `month`.",
-                },
-                "category": {
-                    "type": "string",
-                    "description": "Top-level category to narrow to (breaks down by mid-category instead).",
-                },
-            },
-        },
-    },
-    {
-        "name": "goal_pace",
-        "description": (
-            "Compute pacing math for active goals: percent complete, whether on track\n"
-            "for the deadline, and the daily/monthly amount required to still hit it.\n"
-            "goal_id = 0 (default) means all active goals."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "goal_id": {
-                    "type": "integer",
-                    "description": "ID of a specific goal, or 0 for all active goals.",
-                },
-            },
-        },
-    },
-    {
-        "name": "recurring_charges",
-        "description": (
-            "Detect recurring/subscription-like charges and frequent merchants from\n"
-            "transaction history. Flags merchants that have gone quiet (needs_confirmation)\n"
-            "so the agent can ask the user whether they cancelled it."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "lookback_days": {
-                    "type": "integer",
-                    "description": "How many days of history to scan. Defaults to 180.",
-                },
-                "min_count": {
-                    "type": "integer",
-                    "description": "Minimum charge count to consider a merchant. Defaults to 3.",
-                },
-            },
-        },
-    },
-    {
-        "name": "confirm_recurring_status",
-        "description": (
-            "Record the user's answer to a cancellation-confirmation question raised by\n"
-            "recurring_charges (needs_confirmation: true). status must be 'active', 'cancelled', or 'unknown'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "merchant": {
-                    "type": "string",
-                    "description": "Merchant name as shown by recurring_charges.",
-                },
-                "status": {
-                    "type": "string",
-                    "description": "'active', 'cancelled', or 'unknown'.",
-                },
-                "currency": {
-                    "type": "string",
-                    "description": "Currency of the recurring charge. Defaults to 'DKK'.",
-                },
-            },
-            "required": ["merchant", "status"],
-        },
-    },
-    {
-        "name": "get_current_tip",
-        "description": (
-            "Returns today's financial tip of the day, if one was generated overnight.\n"
-            "Call this opportunistically — as part of the opening brief, or whenever\n"
-            "the user's message could plausibly be reacting to a tip."
-        ),
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "submit_tip_feedback",
-        "description": (
-            "Record the user's conversational reaction to a tip. verdict must be\n"
-            "'accepted' or 'rejected' — always call this with an explicit verdict when\n"
-            "the user pushes back on or endorses a tip. reason_text is required: capture\n"
-            "the user's actual words/reasoning, never just the verdict."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tip_id": {
-                    "type": "integer",
-                    "description": "ID of the tip, from get_current_tip.",
-                },
-                "verdict": {
-                    "type": "string",
-                    "description": "'accepted' or 'rejected'.",
-                },
-                "reason_text": {
-                    "type": "string",
-                    "description": "The user's actual reasoning — required.",
-                },
-                "reason_code": {
-                    "type": "string",
-                    "description": (
-                        "Optional classifier: not_representative, already_addressed, "
-                        "not_actionable, inaccurate, not_relevant, other."
-                    ),
-                },
-            },
-            "required": ["tip_id", "verdict", "reason_text"],
-        },
-    },
-]
-
-# LiteLLM (and every non-Anthropic provider it talks to) expects tools in
-# OpenAI's function-calling shape, not Anthropic's {name, description,
-# input_schema}. Convert once at import time; litellm re-translates this
-# into the Anthropic tool format under the hood when LLM_MODEL is a Claude
-# model, so a single TOOLS list keeps working across providers.
-def _tools_for_litellm(tools: list[dict]) -> list[dict]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["input_schema"],
-            },
-        }
-        for t in tools
-    ]
-
-
-LITELLM_TOOLS = _tools_for_litellm(TOOLS)
-
 # Default-deny: every request needs a valid session cookie unless its path is
 # exempt below. Any new route is therefore protected automatically.
 EXEMPT_EXACT = {
@@ -570,41 +102,6 @@ def _is_exempt(request: Request) -> bool:
     if path in EXEMPT_EXACT:
         return True
     return any(path.startswith(p) for p in EXEMPT_PREFIXES)
-
-
-def _run_tool(name: str, inputs: dict) -> str:
-    dispatch = {
-        "get_memory":             lambda i: get_memory(),
-        "list_accounts":          lambda i: list_accounts(),
-        "get_balances":           lambda i: get_balances(**i),
-        "get_transactions":       lambda i: get_transactions(**i),
-        "categorize_transaction": lambda i: categorize_transaction(**i),
-        "get_sync_status":        lambda i: get_sync_status(),
-        "set_budget":             lambda i: set_budget(**i),
-        "get_budget_status":      lambda i: get_budget_status(),
-        "update_memory":          lambda i: update_memory(**i),
-        "get_goals":              lambda i: get_goals(),
-        "set_goal":               lambda i: set_goal(**i),
-        "update_goal_progress":   lambda i: update_goal_progress(**i),
-        "get_onboarding_status":  lambda i: get_onboarding_status(),
-        "set_onboarding_stage":   lambda i: set_onboarding_stage(**i),
-        "complete_onboarding":    lambda i: complete_onboarding(),
-        "get_overspend_patterns": lambda i: get_overspend_patterns(),
-        "get_spending":           lambda i: get_spending(**i),
-        "compare_spending":       lambda i: compare_spending(**i),
-        "goal_pace":              lambda i: goal_pace(**i),
-        "recurring_charges":      lambda i: recurring_charges(**i),
-        "confirm_recurring_status": lambda i: confirm_recurring_status(**i),
-        "get_current_tip":        lambda i: get_current_tip(),
-        "submit_tip_feedback":    lambda i: submit_tip_feedback(**i),
-    }
-    fn = dispatch.get(name)
-    if fn is None:
-        return f"Unknown tool: {name}"
-    try:
-        return fn(inputs)
-    except Exception as e:
-        return f"Tool error ({name}): {e}"
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -630,6 +127,13 @@ app.mount("/static", StaticFiles(directory=os.path.join(_dir, "static")), name="
 if os.path.isdir(DIST_ASSETS):
     app.mount("/assets", StaticFiles(directory=DIST_ASSETS), name="assets")
 
+# The finance slice's HTTP routes (/budgets/*, /goals, /tip/*), mounted here
+# rather than defined in this file — see slices/finance/routes.py and
+# .agent/epics/vsa-restructure-blueprint.md §6. AuthMiddleware above is
+# added to the app, not per-router, so it wraps these exactly as it wraps
+# every other route declared directly on `app`.
+app.include_router(finance_router)
+
 
 class LoginRequest(BaseModel):
     pin: str
@@ -647,21 +151,8 @@ class FeedbackRequest(BaseModel):
     comment: str | None = None
 
 
-class TipFeedbackRequest(BaseModel):
-    tip_id: int
-    reason_text: str
-
-
 class SyncTriggerRequest(BaseModel):
     months_back: int | None = None
-
-
-class RecategorizeRequest(BaseModel):
-    transaction_id: int  # maps to transactions.id (the primary key) — NOT
-                         # transactions.transaction_id (the bank's own unique
-                         # reference column).
-    category_top: str
-    category_mid: str
 
 
 def _frontend_response():
@@ -738,7 +229,7 @@ def logout(response: Response):
 
 @app.get("/agents")
 def list_agents():
-    storage = Storage()
+    storage = KernelStorage()
     agents = storage.get_agents()
     result = []
     for a in agents:
@@ -759,9 +250,9 @@ class ProviderKeyRequest(BaseModel):
 @app.get("/providers")
 def list_providers():
     # Never include actual key values here — has_key is a boolean presence
-    # check only (Storage().list_providers_with_keys()), the key itself is
-    # never read back out over the API.
-    storage = Storage()
+    # check only (KernelStorage().list_providers_with_keys()), the key itself
+    # is never read back out over the API.
+    storage = KernelStorage()
     configured = storage.list_providers_with_keys()
     catalog = load_catalog()
     return [
@@ -779,13 +270,13 @@ def list_providers():
 def set_provider_key(provider: str, req: ProviderKeyRequest):
     if provider not in load_catalog():
         return JSONResponse({"detail": f"Unknown provider: {provider}"}, status_code=400)
-    Storage().set_provider_key(provider, req.api_key)
+    KernelStorage().set_provider_key(provider, req.api_key)
     return {"ok": True}
 
 
 @app.delete("/providers/{provider}/key")
 def delete_provider_key(provider: str):
-    Storage().delete_provider_key(provider)
+    KernelStorage().delete_provider_key(provider)
     return {"ok": True}
 
 
@@ -793,7 +284,7 @@ def delete_provider_key(provider: str):
 def set_agent_model(agent_id: str, req: ModelUpdateRequest):
     if req.model not in all_model_ids():
         return JSONResponse({"detail": f"Unknown model: {req.model}"}, status_code=400)
-    Storage().set_agent_model(agent_id, req.model)
+    KernelStorage().set_agent_model(agent_id, req.model)
     return {"ok": True}
 
 
@@ -801,7 +292,7 @@ def set_agent_model(agent_id: str, req: ModelUpdateRequest):
 def get_history():
     # get_all_summaries() returns newest-first; reverse for the inline chat
     # timeline, which reads top-to-bottom oldest-to-newest like a scrollback.
-    entries = Storage().get_all_summaries()
+    entries = KernelStorage().get_all_summaries()
     result = []
     for e in entries:
         dt = datetime.fromtimestamp(e.created_at)
@@ -943,7 +434,7 @@ def chat(req: ChatRequest):
                         # which can carry balances/IBANs/merchant detail.
                         _chat_log.info("  TOOL[%d] %s", iteration, c["name"])
                         tool_span = start_tool_span(trace_id, c["name"], args)
-                        result = _run_tool(c["name"], args)
+                        result = run_tool(c["name"], args)
                         end_tool_span(tool_span, result)
                         _chat_log.info("  RESULT: <%d chars>", len(str(result)))
                         messages.append({
@@ -981,147 +472,6 @@ def feedback(req: FeedbackRequest):
     return {"ok": True}
 
 
-@app.get("/tip/today")
-def tip_today():
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    tip = Storage().get_tip_for_date(today)
-    if tip is None:
-        return {"tip": None}
-    return {"tip": tip.model_dump()}
-
-
-@app.post("/tip/feedback")
-def tip_feedback(req: TipFeedbackRequest):
-    # UI path specifically — free-text only, no verdict choice (see
-    # jyske_mcp/jobs/tips.py / server.submit_tip_feedback for the chat path, which
-    # always records an explicit accepted/rejected verdict instead).
-    try:
-        Storage().set_tip_feedback(
-            req.tip_id, "evaluated", None, req.reason_text, source="ui"
-        )
-    except ValueError as e:
-        return JSONResponse({"detail": str(e)}, status_code=400)
-    return {"ok": True}
-
-
-@app.get("/budgets/status")
-def budgets_status():
-    # Storage().get_budget_status() already returns list[dict] directly —
-    # unlike server.get_budget_status() (the MCP tool wrapper, imported
-    # above), which json.dumps()s the same rows into a string for the chat
-    # tool-call path. Call Storage directly here so the dashboard gets real
-    # JSON, not a double-encoded string.
-    return {"budgets": Storage().get_budget_status()}
-
-
-@app.get("/budgets/breakdown")
-def budgets_breakdown(category: str):
-    # Sub-category drill-down for an expandable budget card: same month
-    # window as /budgets/status (via current_month_window()) and the same
-    # sum_spending() aggregation path, just grouped by mid instead of top —
-    # so `total` here always matches that category's `spent` on the status
-    # endpoint.
-    #
-    # Mirrors get_budget_status()'s DKK-primary treatment: `spent`/`total`
-    # are PRIMARY_CURRENCY only (no exchange rate), non-DKK amounts are
-    # surfaced separately via other_currency_amounts (per row and overall)
-    # rather than blended in. `count` is just a line-item count, not a
-    # monetary amount, so it's safe to total across currencies as before.
-    storage = Storage()
-    date_from, date_to = storage.current_month_window()
-    rows = storage.sum_spending(date_from, date_to, category_top=category, group_by="mid")
-
-    by_mid: dict[str | None, dict] = {}
-    for row in rows:
-        key = row["key"] or None
-        entry = by_mid.setdefault(key, {"by_ccy": {}, "count": 0})
-        entry["by_ccy"][row["currency"]] = round(
-            entry["by_ccy"].get(row["currency"], 0.0) + row["amount"], 2
-        )
-        entry["count"] += row["count"]
-
-    breakdown = []
-    uncategorized_entry = None
-    for key, entry in by_mid.items():
-        by_ccy = entry["by_ccy"]
-        spent = round(by_ccy.get(PRIMARY_CURRENCY, 0.0), 2)
-        others = {c: a for c, a in by_ccy.items() if c != PRIMARY_CURRENCY and a}
-        item = {
-            "category_mid": key,
-            "label":        key or "Uncategorized",
-            "spent":        spent,
-            "count":        entry["count"],
-            "uncategorized": key is None,
-        }
-        if others:
-            item["other_currency_amounts"] = others
-        if key is None:
-            uncategorized_entry = item
-        else:
-            breakdown.append(item)
-
-    breakdown.sort(key=lambda x: x["spent"], reverse=True)
-    if uncategorized_entry is not None:
-        breakdown.append(uncategorized_entry)
-
-    total = round(sum(item["spent"] for item in breakdown), 2)
-    overall_others: dict[str, float] = {}
-    for item in breakdown:
-        for c, a in item.get("other_currency_amounts", {}).items():
-            overall_others[c] = round(overall_others.get(c, 0.0) + a, 2)
-
-    response = {
-        "category":    category,
-        "period_from": date_from,
-        "period_to":   date_to,
-        "total":       total,
-        "breakdown":   breakdown,
-    }
-    if overall_others:
-        response["other_currency_amounts"] = overall_others
-    return response
-
-
-@app.get("/budgets/transactions")
-def budgets_transactions(
-    category: str,
-    mid: str | None = None,
-    uncategorized: bool = False,
-):
-    # Line items backing a single row from /budgets/breakdown. Uses the same
-    # month window (current_month_window()) and Storage().get_transactions_by_category(),
-    # which mirrors sum_spending()'s filters exactly so these always sum to
-    # that row's `spent` figure. Never returns raw_data.
-    storage = Storage()
-    date_from, date_to = storage.current_month_window()
-    items = storage.get_transactions_by_category(
-        date_from,
-        date_to,
-        category_top=category,
-        category_mid=None if uncategorized else mid,
-        uncategorized=uncategorized,
-    )
-    return {
-        "category":     category,
-        "category_mid": None if uncategorized else mid,
-        "period_from":  date_from,
-        "period_to":    date_to,
-        "items":        [i.model_dump() for i in items],
-    }
-
-
-@app.get("/goals")
-def goals():
-    # Same reasoning as /budgets/status used to be: Storage().get_goals()
-    # now returns list[GoalDTO] — model_dump() each one back to a plain
-    # dict before merging in "pace". goal_pace() is the MCP tool (imported
-    # above, reused as-is per convention) and returns a JSON string keyed by
-    # "goal_id" per goal — matches GoalDTO's "id" field.
-    base = Storage().get_goals()
-    pace = {p["goal_id"]: p for p in json.loads(goal_pace())}
-    return {"goals": [{**g.model_dump(), "pace": pace.get(g.id)} for g in base]}
-
-
 @app.get("/audit/data")
 def audit_data(agent_id: str = "finance"):
     # Data-audit view: everything the agent has on the user, in one
@@ -1129,27 +479,26 @@ def audit_data(agent_id: str = "finance"):
     # actually being considered. transactions/profile are account-global (no
     # agent_id column to scope by); summaries are recorded per-agent but
     # currently shown across all agents (see get_all_summaries); budgets/
-    # goals/tips are agent-scoped and filtered active-only / by agent_id the
-    # same way their existing single-agent endpoints already do above.
+    # goals/tips are agent-scoped and filtered active-only / by agent_id —
+    # that finance-domain assembly now lives in slices/finance/api.py's
+    # audit_section(), which this route merges in below.
     #
-    # transactions never includes raw_data — Storage().get_all_transactions()
+    # transactions never includes raw_data — KernelStorage().get_all_transactions()
     # only selects the compact typed columns, never the raw Enable Banking
     # payload (see the no-raw-transaction-data rule this file is bound by).
-    storage = Storage()
+    storage = KernelStorage()
     transactions = storage.get_all_transactions()
     return {
         "profile":      storage.get_all_profile(),
         "summaries":    [s.model_dump() for s in storage.get_all_summaries()],
-        "budgets":      storage.get_budget_status(agent_id),
-        "goals":        [g.model_dump() for g in storage.get_goals(agent_id)],
-        "tips":         [t.model_dump() for t in storage.get_all_tips_with_feedback(agent_id)],
         "transactions": {"count": len(transactions), "items": [t.model_dump() for t in transactions]},
+        **finance_audit_section(agent_id),
     }
 
 
 @app.get("/consent/status")
 def consent_status():
-    storage = Storage()
+    storage = KernelStorage()
     session = storage.read_session_unchecked()
     last_sync = storage.get_last_sync()
 
@@ -1208,7 +557,7 @@ def consent_status():
 @app.post("/consent/start")
 def consent_start():
     try:
-        result = consent_lib.start_authorization(Storage())
+        result = consent_lib.start_authorization(KernelStorage())
         return {"auth_url": result["auth_url"]}
     except Exception as e:
         return JSONResponse(
@@ -1222,7 +571,7 @@ def consent_callback(code: str | None = None, state: str | None = None, error: s
     if error:
         return RedirectResponse(f"/?consent=error&reason={error}", status_code=302)
     try:
-        consent_lib.complete_authorization(Storage(), code, state)
+        consent_lib.complete_authorization(KernelStorage(), code, state)
         return RedirectResponse("/?consent=success", status_code=302)
     except Exception as e:
         log = logging.getLogger("consent")
@@ -1261,42 +610,6 @@ def sync_status():
             status_code=200,
         )
     return JSONResponse(resp.json(), status_code=resp.status_code)
-
-
-@app.get("/budgets/categories")
-def budgets_categories():
-    # Single source of truth for the category picker (frontend) and for
-    # validating /budgets/recategorize requests — both read category_tree().
-    return {"tree": category_tree()}
-
-
-@app.post("/budgets/recategorize")
-def budgets_recategorize(req: RecategorizeRequest):
-    tree = category_tree()
-    if req.category_top not in tree:
-        return JSONResponse(
-            {"detail": f"Unknown category_top: {req.category_top}"}, status_code=400
-        )
-    if req.category_mid not in tree[req.category_top]:
-        return JSONResponse(
-            {"detail": f"Unknown category_mid: {req.category_mid} for {req.category_top}"},
-            status_code=400,
-        )
-
-    result = Storage().recategorize_from_transaction(
-        req.transaction_id, req.category_top, req.category_mid
-    )
-    if result is None:
-        return JSONResponse({"detail": "Transaction not found"}, status_code=404)
-
-    return {
-        "ok": True,
-        "raw_name": result["raw_name"],
-        "old_category_top": result["old_category_top"],
-        "new_category_top": req.category_top,
-        "new_category_mid": req.category_mid,
-        "transactions_updated": result["transactions_updated"],
-    }
 
 
 # Catch-all (declared last so it never shadows the API routes or mounts above).

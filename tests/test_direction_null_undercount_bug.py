@@ -28,7 +28,7 @@ import sqlite3
 import time
 
 import jyske_mcp.kernel.storage as storage_module
-import jyske_mcp.mcp.server as server
+import jyske_mcp.slices.finance.tools as server
 
 
 def _insert_tx(*, category_top, category_mid, amount, currency, day, direction, account_uid="acc1"):

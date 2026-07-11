@@ -1,14 +1,20 @@
 """
 Nightly LLM-as-judge evaluation of the previous day's /chat traces, scored
 back into Langfuse. Registered from jyske_mcp/jobs/scheduler.py at 04:00, after the
-03:00 sync job.
+03:00 sync job (via jyske_mcp.slices.finance.api.run_evals).
 
 This only ever talks to the local .env config and Langfuse's own API for
 its own trace/score data — it has nothing to do with Enable Banking, so the
-"server.py/cron split" rules elsewhere in this codebase don't apply here.
+"tools.py/cron split" rules elsewhere in this codebase don't apply here.
 
 No-ops cleanly (with a one-line log) when Langfuse is disabled/unconfigured
 or there are zero traces to score — never raises.
+
+Relocated out of jyske_mcp/jobs/evals.py at epic deliverable #7a
+(.agent/epics/vsa-restructure-blueprint.md §4/§6) — behavior-preserving move,
+no logic changes. Moves wholesale rather than splitting out a generic
+trace-judge harness; that extraction only makes sense once a 2nd slice needs
+evals too.
 """
 
 import json
