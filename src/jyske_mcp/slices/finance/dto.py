@@ -2,7 +2,7 @@
 Pydantic DTOs at the finance-domain storage seam (VSA restructure epic,
 deliverable #5 — see .agent/epics/vsa-restructure-blueprint.md §2/§3).
 
-These model the shapes FinanceStorage (jyske_mcp/storage.py) exchanges with
+These model the shapes FinanceStorage (jyske_mcp/slices/finance/storage.py) exchanges with
 its callers: spending aggregation, budgets/budget-status, goals, recurring-
 charge detection, onboarding, budget history/overspend patterns, and tips.
 

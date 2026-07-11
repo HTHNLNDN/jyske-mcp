@@ -8,7 +8,8 @@ from collections import Counter
 from datetime import datetime, timezone, timedelta
 
 from mcp.server.fastmcp import FastMCP
-from jyske_mcp.storage import Storage, SessionExpiredError
+from jyske_mcp.slices.finance.storage import Storage
+from jyske_mcp.kernel.storage import SessionExpiredError
 from jyske_mcp.kernel.categorizer import categorize, top_categories
 from jyske_mcp.kernel.dto import AccountDTO, BalanceSnapshotDTO
 

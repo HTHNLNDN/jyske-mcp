@@ -37,7 +37,7 @@ def test_is_sync_stale_boundary_just_over_threshold_is_stale():
 
 def test_check_sync_freshness_logs_error_when_stale(monkeypatch, caplog):
     import jyske_mcp.jobs.scheduler as sched
-    from jyske_mcp.storage import Storage
+    from jyske_mcp.slices.finance.storage import Storage
 
     monkeypatch.setattr(Storage, "get_last_sync", lambda self: None)
 
@@ -54,7 +54,7 @@ def test_check_sync_freshness_logs_error_when_stale(monkeypatch, caplog):
 def test_check_sync_freshness_logs_error_when_stale_with_prior_sync(monkeypatch, caplog):
     import jyske_mcp.jobs.scheduler as sched
     import time as time_mod
-    from jyske_mcp.storage import Storage
+    from jyske_mcp.slices.finance.storage import Storage
 
     stale_completed_at = time_mod.time() - 27 * 3600
     monkeypatch.setattr(
@@ -74,7 +74,7 @@ def test_check_sync_freshness_logs_error_when_stale_with_prior_sync(monkeypatch,
 def test_check_sync_freshness_silent_when_fresh(monkeypatch, caplog):
     import jyske_mcp.jobs.scheduler as sched
     import time as time_mod
-    from jyske_mcp.storage import Storage
+    from jyske_mcp.slices.finance.storage import Storage
 
     fresh_completed_at = time_mod.time() - 1 * 3600
     monkeypatch.setattr(

@@ -10,7 +10,7 @@ displays the ?code= to paste below.
 from pprint import pprint
 
 from jyske_mcp.kernel.consent import start_authorization, complete_authorization
-from jyske_mcp.storage import Storage
+from jyske_mcp.slices.finance.storage import Storage
 
 storage = Storage()
 

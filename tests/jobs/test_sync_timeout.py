@@ -51,7 +51,7 @@ def test_run_sync_balances_fetch_passes_http_timeout(monkeypatch, patched_auth_h
     storage.balance_fetched_at.return_value = None  # stale -> balances GET fires
     storage.get_budget_status.return_value = []
     storage.backfill_categories.return_value = 0
-    monkeypatch.setattr(sync, "Storage", MagicMock(return_value=storage))
+    monkeypatch.setattr(sync, "KernelStorage", MagicMock(return_value=storage))
 
     sync.run_sync()
 

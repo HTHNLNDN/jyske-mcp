@@ -25,6 +25,7 @@ import uvicorn
 from jyske_mcp.kernel.sync import run_sync
 from jyske_mcp.jobs.evals import run_evals
 from jyske_mcp.jobs.tips import run_tips
+from jyske_mcp.slices.finance.api import snapshot_budget_history
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +50,11 @@ _sync_state = {"running": False, "error": None, "started_at": None}
 def _sync_worker(months_back: int | None) -> None:
     try:
         run_sync(months_back=months_back)
+        # Finance-domain post-sync hook, run in the same job/thread as
+        # run_sync — never a second sync-execution path (this process
+        # remains sync's single owner). See
+        # jyske_mcp.slices.finance.api.snapshot_budget_history's docstring.
+        snapshot_budget_history()
     except Exception as e:
         _sync_state["error"] = str(e)
     finally:
@@ -67,7 +73,7 @@ def _start_sync(months_back: int | None = None) -> bool:
 
 
 def check_sync_freshness() -> None:
-    from jyske_mcp.storage import Storage
+    from jyske_mcp.slices.finance.storage import Storage
     from jyske_mcp.kernel.sync import is_sync_stale, STALE_SYNC_HOURS
     last = Storage().get_last_sync()
     if is_sync_stale(last, time.time()):
@@ -141,7 +147,7 @@ def trigger_tips():
 
 @app.get("/sync/status", dependencies=[Depends(require_scheduler_secret)])
 def sync_status():
-    from jyske_mcp.storage import Storage
+    from jyske_mcp.slices.finance.storage import Storage
     last = Storage().get_last_sync()
     last_sync = None
     if last is not None:

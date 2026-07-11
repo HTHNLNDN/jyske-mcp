@@ -1,6 +1,6 @@
 """
 Covers the currency de-blending fix across get_spending, compare_spending
-(jyske_mcp/mcp/server.py) and get_budget_status (jyske_mcp/storage.py).
+(jyske_mcp/mcp/server.py) and get_budget_status (jyske_mcp/slices/finance/storage.py).
 
 Previously each of these summed `amount` across rows regardless of
 `currency` — a mixed DKK+EUR transaction set would silently blend into one
@@ -15,19 +15,20 @@ Uses a real temporary SQLite DB with the same DDL as
 migrations/versions/64bed3498587_initial_schema.py plus the columns added by
 784418892304_add_math_aggregation_tools.py (direction) and
 2408de69fc02_add_agent_id_to_budgets_and_summaries.py (agent_id) — Storage no
-longer creates tables itself (see jyske_mcp/storage.py's
+longer creates tables itself (see jyske_mcp/kernel/storage.py's
 _check_schema_version), so the fixture must create them. Both a fresh
 Storage() and jyske_mcp.mcp.server's module-global `storage` read the same
-DB, since _db() re-reads storage_module._CACHE_DB on every call — monkeypatching
-that global (and CONFIG_DIR) is enough to redirect both.
+DB, since _db() (defined in jyske_mcp.kernel.storage) re-reads
+storage_module._CACHE_DB on every call — monkeypatching that global (and
+CONFIG_DIR) is enough to redirect both.
 """
 import sqlite3
 import time
 
 import pytest
 
-import jyske_mcp.storage as storage_module
-from jyske_mcp.storage import Storage
+import jyske_mcp.kernel.storage as storage_module
+from jyske_mcp.slices.finance.storage import Storage
 
 _TRANSACTIONS_DDL = """
     CREATE TABLE transactions (

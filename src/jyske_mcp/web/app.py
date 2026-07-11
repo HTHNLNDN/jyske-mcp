@@ -19,7 +19,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from jyske_mcp.kernel.config import ENV_FILE, ROOT_DIR, CHAT_LOG_FILE, secure_config_files, secure_rotating_handler
-from jyske_mcp.storage import Storage, PRIMARY_CURRENCY
+from jyske_mcp.slices.finance.storage import Storage, PRIMARY_CURRENCY
 from jyske_mcp.kernel.categorizer import category_tree
 from jyske_mcp.kernel import consent as consent_lib
 from jyske_mcp.kernel import scheduler_client

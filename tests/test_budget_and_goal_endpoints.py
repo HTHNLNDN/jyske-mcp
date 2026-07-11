@@ -3,7 +3,8 @@ Characterization tests (golden master, FastAPI TestClient) for the
 money-math HTTP endpoints in jyske_mcp/web/app.py: /budgets/status,
 /budgets/breakdown, /budgets/transactions, /goals. Pins the exact JSON
 shapes these endpoints return today, including the DKK-primary /
-other_currency_amounts de-blending (see PRIMARY_CURRENCY in storage.py) and
+other_currency_amounts de-blending (see PRIMARY_CURRENCY in
+slices/finance/storage.py) and
 the "uncategorized always sorts last" behavior of /budgets/breakdown — a
 future VSA relocation of this code must keep producing byte-identical
 output, since the Vue frontend consumes these shapes directly.
@@ -22,7 +23,7 @@ import os
 import sqlite3
 import time
 
-import jyske_mcp.storage as storage_module
+import jyske_mcp.kernel.storage as storage_module
 import jyske_mcp.web.app as app_module
 from fastapi.testclient import TestClient
 

@@ -1,6 +1,6 @@
 """
 Standalone benchmark for the per-account batched-insert fix in
-jyske_mcp/storage.py (Storage.store_transaction / store_transactions_batch).
+jyske_mcp/kernel/storage.py (Storage.store_transaction / store_transactions_batch).
 
 NOT a pytest test — run directly:
 
@@ -31,8 +31,14 @@ import time
 from pathlib import Path
 
 import jyske_mcp.kernel.config as config_module
-import jyske_mcp.storage as storage_module
-from jyske_mcp.storage import Storage
+# _db() is defined in kernel/storage.py, and re-reads its OWN module's
+# _CACHE_DB/CONFIG_DIR globals at call time regardless of which subclass
+# instance calls it — so those two globals must be monkeypatched on
+# jyske_mcp.kernel.storage, not on jyske_mcp.slices.finance.storage (see
+# .agent/epics/vsa-restructure-blueprint.md §2 and
+# jyske_mcp.kernel.storage.KernelStorage._db's docstring).
+import jyske_mcp.kernel.storage as storage_module
+from jyske_mcp.slices.finance.storage import Storage
 
 _TRANSACTIONS_DDL = """
     CREATE TABLE transactions (

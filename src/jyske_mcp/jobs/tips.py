@@ -36,7 +36,7 @@ log = logging.getLogger("tips")
 
 from jyske_mcp.kernel.categorizer import top_categories
 from jyske_mcp.kernel.llm import LLMNotConfiguredError, resolve_agent_llm, simple_completion
-from jyske_mcp.storage import Storage
+from jyske_mcp.slices.finance.storage import Storage
 from jyske_mcp.slices.finance.dto import TipDTO
 
 # server.py's tool functions are plain Python functions returning JSON

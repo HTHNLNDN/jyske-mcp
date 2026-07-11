@@ -31,7 +31,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
-import jyske_mcp.storage as storage_module
+import jyske_mcp.kernel.storage as storage_module
 import jyske_mcp.mcp.server as server
 
 
@@ -60,7 +60,7 @@ def _insert_tx(*, category_top, category_mid, amount, currency, day, direction="
 
 
 def _sorted_breakdown(rows: list[dict]) -> list[dict]:
-    # sum_spending()'s SQL has no ORDER BY (see jyske_mcp/storage.py) — its
+    # sum_spending()'s SQL has no ORDER BY (see jyske_mcp/slices/finance/storage.py) — its
     # GROUP BY row order is an incidental SQLite implementation detail, not
     # a contract, so breakdown rows are compared sorted rather than
     # position-by-position.

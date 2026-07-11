@@ -1,5 +1,5 @@
 """
-Unit tests for Storage.sum_spending (jyske_mcp/storage.py) — the core
+Unit tests for Storage.sum_spending (jyske_mcp/slices/finance/storage.py) — the core
 aggregation query underlying get_spending/compare_spending/get_budget_status.
 Groups debit spending (direction != 'CRDT') between two ISO dates by the
 requested key, always folded per currency too (see sum_spending's docstring
@@ -16,8 +16,8 @@ import time
 
 import pytest
 
-import jyske_mcp.storage as storage_module
-from jyske_mcp.storage import Storage
+import jyske_mcp.kernel.storage as storage_module
+from jyske_mcp.slices.finance.storage import Storage
 
 _TRANSACTIONS_DDL = """
     CREATE TABLE transactions (

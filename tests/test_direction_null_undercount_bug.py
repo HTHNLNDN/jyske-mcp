@@ -3,14 +3,15 @@ CHARACTERIZATION TEST — pins a KNOWN, NOT-YET-FIXED bug. Do not "fix" the
 assertions below to what the math *should* be; that would defeat the point
 of this file.
 
-Storage.sum_spending() (jyske_mcp/storage.py) — the aggregation underlying
-the get_spending / compare_spending MCP tools and get_budget_status —
-filters with `WHERE direction != 'CRDT'`. In SQLite, `NULL != 'CRDT'`
-evaluates to NULL (neither true nor false), so any transaction row whose
-`direction` column is NULL is SILENTLY EXCLUDED from every spending
-aggregate, even when it's a genuine debit that should count. `direction`
-is nullable (see jyske_mcp/storage.py: `tx.get("credit_debit_indicator")`
-is stored as-is, with no NOT NULL constraint — migrations/versions/
+Storage.sum_spending() (jyske_mcp/slices/finance/storage.py) — the
+aggregation underlying the get_spending / compare_spending MCP tools and
+get_budget_status — filters with `WHERE direction != 'CRDT'`. In SQLite,
+`NULL != 'CRDT'` evaluates to NULL (neither true nor false), so any
+transaction row whose `direction` column is NULL is SILENTLY EXCLUDED from
+every spending aggregate, even when it's a genuine debit that should
+count. `direction` is nullable (see jyske_mcp/kernel/storage.py:
+`tx.get("credit_debit_indicator")` is stored as-is, with no NOT NULL
+constraint — migrations/versions/
 784418892304_add_math_aggregation_tools.py added the column as nullable),
 so this isn't a hypothetical: any transaction whose raw Enable Banking
 payload lacks credit_debit_indicator lands with direction=NULL and quietly
@@ -26,7 +27,7 @@ block.
 import sqlite3
 import time
 
-import jyske_mcp.storage as storage_module
+import jyske_mcp.kernel.storage as storage_module
 import jyske_mcp.mcp.server as server
 
 

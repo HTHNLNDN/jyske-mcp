@@ -27,8 +27,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import jyske_mcp.storage as storage_module
-from jyske_mcp.storage import Storage
+import jyske_mcp.kernel.storage as storage_module
+from jyske_mcp.slices.finance.storage import Storage
 
 _GOALS_DDL = """
     CREATE TABLE goals (

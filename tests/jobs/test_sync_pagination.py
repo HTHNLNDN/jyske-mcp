@@ -70,7 +70,7 @@ def test_run_sync_stores_all_pages_via_storage(monkeypatch, patched_auth_headers
     storage.balance_fetched_at.return_value = __import__("time").time()  # balances fresh -> GET skipped
     storage.get_budget_status.return_value = []
     storage.backfill_categories.return_value = 0
-    monkeypatch.setattr(sync, "Storage", MagicMock(return_value=storage))
+    monkeypatch.setattr(sync, "KernelStorage", MagicMock(return_value=storage))
 
     sync.run_sync()
 

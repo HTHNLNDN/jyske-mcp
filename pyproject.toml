@@ -25,30 +25,11 @@ jyske_mcp = ["kernel/data/*.json", "prompts/*.md"]
 [tool.importlinter]
 root_package = "jyske_mcp"
 
-# ignore_imports below: jyske_mcp.storage (deliverable #5) now composes
-# FinanceStorage, which constructs jyske_mcp.slices.finance.dto DTOs at the
-# seam — while jyske_mcp.kernel.llm and jyske_mcp.kernel.sync (both already
-# relocated at #4) still import the combined Storage class from that same,
-# not-yet-split module for their OWN kernel-only needs (llm.py:
-# get_agent/get_provider_key; sync.py: get_session/store_transactions_batch/
-# etc, PLUS the pre-existing get_budget_status/record_budget_history
-# back-edge the blueprint already flags — see
-# .agent/epics/vsa-restructure-blueprint.md's "Two cross-layer couplings"
-# and §7 point 1). Since storage.py is one unmoved file (#5 explicitly does
-# NOT do the physical relocation), there is no way to import Storage's
-# kernel-only methods without the same module also carrying its
-# not-yet-physically-separated FinanceStorage half — so this one edge is a
-# deliberate, visible, TEMPORARY exception. Deliverable #6 resolves it for
-# real: KernelStorage -> kernel/storage.py, FinanceStorage ->
-# slices/finance/storage.py, sync.py's budget-history tail lifts into a
-# finance post-sync hook the platform scheduler calls instead — at which
-# point this ignore_imports line should be deleted, not carried forward.
 [[tool.importlinter.contracts]]
 name = "Kernel imports nothing upward"
 type = "forbidden"
 source_modules = ["jyske_mcp.kernel"]
 forbidden_modules = ["jyske_mcp.slices", "jyske_mcp.platform"]
-ignore_imports = ["jyske_mcp.storage -> jyske_mcp.slices.finance.dto"]
 
 [[tool.importlinter.contracts]]
 name = "Slices must not import each other"
@@ -60,11 +41,10 @@ name = "platform -> slices -> kernel layering"
 type = "layers"
 layers = ["platform", "slices", "kernel"]
 containers = ["jyske_mcp"]
-ignore_imports = ["jyske_mcp.storage -> jyske_mcp.slices.finance.dto"]
 
-# mypy — strict scoped to seam modules only (deliverable #5: the two DTO
-# modules). storage.py/api.py join this list at #6/#7 once they physically
-# relocate under kernel/ and slices/finance/ — see
+# mypy — strict scoped to seam modules only. jyske_mcp.storage was physically
+# split at deliverable #6 (KernelStorage -> kernel/storage.py, FinanceStorage
+# -> slices/finance/storage.py) — see
 # .agent/epics/vsa-restructure-blueprint.md §5. Deliberately NOT global
 # strict + per-module opt-out: the baseline stays lenient everywhere else
 # until #10.
@@ -74,6 +54,8 @@ python_version = "3.12"
 [[tool.mypy.overrides]]
 module = [
     "jyske_mcp.kernel.dto",
+    "jyske_mcp.kernel.storage",
     "jyske_mcp.slices.finance.dto",
+    "jyske_mcp.slices.finance.storage",
 ]
 strict = true

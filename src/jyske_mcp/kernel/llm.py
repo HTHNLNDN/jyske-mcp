@@ -1,6 +1,6 @@
 """
 Single module for all LLM calls. Model/API-key selection is per-agent and
-DB-configured (see jyske_mcp/storage.py's agents/provider_keys tables and
+DB-configured (see jyske_mcp/kernel/storage.py's agents/provider_keys tables and
 resolve_agent_llm() below) rather than a global env var — the one exception
 is jyske_mcp/kernel/sync.py's merchant categorization and jyske_mcp/jobs/evals.py's JUDGE_MODEL,
 which are out of scope for that and keep passing an explicit bare model
@@ -24,7 +24,7 @@ from typing import Any, Generator, NamedTuple
 import litellm
 from langfuse import Langfuse
 
-from jyske_mcp.storage import Storage
+from jyske_mcp.kernel.storage import KernelStorage
 
 litellm.drop_params = True  # silently ignore unsupported provider params
 
@@ -41,13 +41,13 @@ class AgentLLMConfig(NamedTuple):
 def resolve_agent_llm(agent_id: str) -> AgentLLMConfig:
     """
     Resolves an agent's configured model + the API key for that model's
-    provider, both DB-backed (see jyske_mcp/storage.py). Raises
+    provider, both DB-backed (see jyske_mcp/kernel/storage.py). Raises
     LLMNotConfiguredError with a clear, user-facing message at every step
     where configuration is missing — callers (app.py's /chat, jyske_mcp/jobs/tips.py)
     are expected to catch it and degrade gracefully rather than let it
     surface as a raw exception.
     """
-    storage = Storage()
+    storage = KernelStorage()
     agent = storage.get_agent(agent_id)
     if agent is None:
         raise LLMNotConfiguredError(f"Unknown agent '{agent_id}'.")

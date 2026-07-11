@@ -15,7 +15,7 @@ from urllib3.util.retry import Retry
 from jyske_mcp.kernel.auth import auth_headers, BASE_URL, HTTP_TIMEOUT
 from jyske_mcp.kernel.categorizer import categorize
 from jyske_mcp.kernel.llm import simple_completion
-from jyske_mcp.storage import Storage, SessionExpiredError
+from jyske_mcp.kernel.storage import KernelStorage, SessionExpiredError
 
 # ── logging ───────────────────────────────────────────────────────────────────
 
@@ -74,13 +74,13 @@ def is_sync_stale(last_sync: dict | None, now: float, threshold_hours: float = S
         return True
     return (now - last_sync["completed_at"]) > threshold_hours * 3600
 
-def _balance_stale(storage: Storage, account_uid: str) -> bool:
+def _balance_stale(storage: KernelStorage, account_uid: str) -> bool:
     """True if no balance data cached or last fetch was more than 6 hours ago."""
     fetched_at = storage.balance_fetched_at(account_uid)
     return fetched_at is None or (time.time() - fetched_at) >= _BALANCE_TTL
 
 
-def _batch_categorize(items: list[dict], storage: Storage) -> None:
+def _batch_categorize(items: list[dict], storage: KernelStorage) -> None:
     """
     Single LLM call to categorize a deduplicated batch of merchants.
     Hardcoded to Haiku regardless of LLM_MODEL — fast and cheap for a
@@ -193,7 +193,7 @@ def run_sync(months_back: int | None = None) -> None:
     started_at = time.time()
     log.info("─── Sync started ───────────────────────────────────────────")
 
-    storage = Storage()
+    storage = KernelStorage()
     errors: list[str] = []
     account_details: list[dict] = []
     total_fetched = 0
@@ -372,17 +372,13 @@ def run_sync(months_back: int | None = None) -> None:
         errors=details_payload,
     )
 
-    # ── budget history ───────────────────────────────────────────────────────
-    # snapshot each active budget's spend-to-date so pattern detection
-    # (get_overspend_patterns) always has fresh data to work from.
-    for row in storage.get_budget_status(agent_id="finance"):
-        storage.record_budget_history(
-            agent_id="finance",
-            category_top=row["category"],
-            period=row["period"],
-            limit_amount=row["limit"],
-            actual_amount=row["spent"],
-        )
+    # Budget-history snapshotting used to happen here. It's finance-domain
+    # (get_budget_status/record_budget_history), so it's lifted out into
+    # jyske_mcp.slices.finance.api.snapshot_budget_history() — kernel must
+    # never call finance storage (see .agent/epics/vsa-restructure-blueprint.md's
+    # "Two cross-layer couplings"). The platform scheduler's daily_sync job
+    # calls run_sync() then that hook, in the same job, immediately after this
+    # function returns.
 
     log.info(
         "Done in %.1fs — %d accounts, %d fetched (%d new), %d LLM-categorized, %d errors",

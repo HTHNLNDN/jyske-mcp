@@ -55,7 +55,7 @@ def test_incremental_sync_skips_categorizing_transactions_at_or_before_cursor(mo
     monkeypatch.setattr(sync, "categorize", lambda raw_name, mcc, storage: None)
     spy = MagicMock()
     monkeypatch.setattr(sync, "_batch_categorize", spy)
-    monkeypatch.setattr(sync, "Storage", MagicMock(return_value=_stub_storage(most_recent="2026-07-08")))
+    monkeypatch.setattr(sync, "KernelStorage", MagicMock(return_value=_stub_storage(most_recent="2026-07-08")))
 
     sync.run_sync()  # months_back=None -> categorize_all=False
 
@@ -75,7 +75,7 @@ def test_backfill_sync_categorizes_transactions_older_than_cursor_too(monkeypatc
     monkeypatch.setattr(sync, "categorize", lambda raw_name, mcc, storage: None)
     spy = MagicMock()
     monkeypatch.setattr(sync, "_batch_categorize", spy)
-    monkeypatch.setattr(sync, "Storage", MagicMock(return_value=_stub_storage(most_recent="2026-07-08")))
+    monkeypatch.setattr(sync, "KernelStorage", MagicMock(return_value=_stub_storage(most_recent="2026-07-08")))
 
     sync.run_sync(months_back=3)  # explicit backfill -> categorize_all=True
 
@@ -96,7 +96,7 @@ def test_needs_llm_deduplicated_by_raw_name_before_batch_categorize(monkeypatch,
     monkeypatch.setattr(sync, "categorize", lambda raw_name, mcc, storage: None)
     spy = MagicMock()
     monkeypatch.setattr(sync, "_batch_categorize", spy)
-    monkeypatch.setattr(sync, "Storage", MagicMock(return_value=_stub_storage(most_recent=None)))  # first run
+    monkeypatch.setattr(sync, "KernelStorage", MagicMock(return_value=_stub_storage(most_recent=None)))  # first run
 
     sync.run_sync()
 
@@ -116,7 +116,7 @@ def test_no_unknown_merchants_skips_batch_categorize_call_entirely(monkeypatch, 
     })
     spy = MagicMock()
     monkeypatch.setattr(sync, "_batch_categorize", spy)
-    monkeypatch.setattr(sync, "Storage", MagicMock(return_value=_stub_storage(most_recent=None)))
+    monkeypatch.setattr(sync, "KernelStorage", MagicMock(return_value=_stub_storage(most_recent=None)))
 
     sync.run_sync()
 

@@ -1,19 +1,19 @@
 """
-Covers the NULL-transaction_id dedup fix in jyske_mcp/storage.py.
+Covers the NULL-transaction_id dedup fix in jyske_mcp/kernel/storage.py.
 
 transaction_id is TEXT UNIQUE, but SQLite treats every NULL as distinct
 from every other NULL, so store_transaction()'s
 ON CONFLICT(transaction_id) DO UPDATE never fired for transactions lacking
 both transaction_id and entry_reference — they re-inserted (duplicated) on
 every overlapping sync. store_transaction() now assigns these rows a
-deterministic synthetic id (jyske_mcp.storage.synthetic_transaction_id) so the
-upsert works correctly.
+deterministic synthetic id (jyske_mcp.kernel.storage.synthetic_transaction_id)
+so the upsert works correctly.
 
 Uses a real temporary SQLite DB with the same DDL as
 migrations/versions/64bed3498587_initial_schema.py plus the columns added
 by 784418892304_add_math_aggregation_tools.py (direction) — Storage no
-longer creates tables itself (see jyske_mcp/storage.py's _check_schema_version),
-so the fixture must create them.
+longer creates tables itself (see jyske_mcp/kernel/storage.py's
+_check_schema_version), so the fixture must create them.
 """
 import sqlite3
 import tempfile
@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-import jyske_mcp.storage as storage_module
-from jyske_mcp.storage import Storage
+import jyske_mcp.kernel.storage as storage_module
+from jyske_mcp.slices.finance.storage import Storage
 
 _TRANSACTIONS_DDL = """
     CREATE TABLE transactions (

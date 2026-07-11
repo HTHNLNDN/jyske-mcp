@@ -9,15 +9,15 @@ against real Enable Banking credentials. Plain TestClient skips lifespan and
 only exercises routes/dependencies, which is all the auth layer under test
 needs.
 
-Business logic (run_sync/run_tips/Storage.get_last_sync) is monkeypatched out
-so these tests only assert on the auth dependency's behavior, not on
-sync/tips/status internals (covered elsewhere).
+Business logic (run_sync/snapshot_budget_history/run_tips/Storage.get_last_sync)
+is monkeypatched out so these tests only assert on the auth dependency's
+behavior, not on sync/tips/status internals (covered elsewhere).
 """
 import pytest
 from fastapi.testclient import TestClient
 
 import jyske_mcp.jobs.scheduler as sched
-import jyske_mcp.storage
+import jyske_mcp.slices.finance.storage
 
 client = TestClient(sched.app)
 
@@ -32,8 +32,14 @@ ROUTES = [
 def _patch_business_logic(monkeypatch):
     """Isolate the auth dependency from the route bodies it guards."""
     monkeypatch.setattr(sched, "run_sync", lambda *a, **k: None)
+    # Post-sync finance hook, called right after run_sync in the same job
+    # (jyske_mcp.jobs.scheduler._sync_worker) — must be stubbed out here too,
+    # or a real /sync/trigger call in this test would hit the real cache.db.
+    monkeypatch.setattr(sched, "snapshot_budget_history", lambda *a, **k: None)
     monkeypatch.setattr(sched, "run_tips", lambda: None)
-    monkeypatch.setattr(jyske_mcp.storage.Storage, "get_last_sync", lambda self: None)
+    monkeypatch.setattr(
+        jyske_mcp.slices.finance.storage.Storage, "get_last_sync", lambda self: None
+    )
 
 
 def _call(method, path, headers=None):

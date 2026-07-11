@@ -2,7 +2,7 @@
 Pydantic DTOs at the kernel storage seam (VSA restructure epic, deliverable
 #5 — see .agent/epics/vsa-restructure-blueprint.md §2/§3).
 
-These model the generic-primitive shapes KernelStorage (jyske_mcp/storage.py)
+These model the generic-primitive shapes KernelStorage (jyske_mcp/kernel/storage.py)
 exchanges with its callers: merchant categorization, sync bookkeeping,
 agents, session summaries, and compact (never raw_data) transaction rows.
 

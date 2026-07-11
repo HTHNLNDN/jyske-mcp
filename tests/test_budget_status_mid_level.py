@@ -1,5 +1,5 @@
 """
-Covers the mid-level budget scoring bug in jyske_mcp/storage.py's
+Covers the mid-level budget scoring bug in jyske_mcp/slices/finance/storage.py's
 get_budget_status().
 
 Previously, spending was aggregated with sum_spending(..., group_by="category")
@@ -16,18 +16,18 @@ single top-level aggregate query (no extra query in the common case).
 Uses a real temporary SQLite DB with the same DDL as
 migrations/versions/64bed3498587_initial_schema.py plus the agent_id column
 added by 2408de69fc02_add_agent_id_to_budgets_and_summaries.py — Storage no
-longer creates tables itself (see jyske_mcp/storage.py's _check_schema_version),
-so the fixture must create them. Transactions are inserted directly via raw
-SQL (not store_transaction/categorize) so category_top/category_mid can be
-set explicitly and deterministically.
+longer creates tables itself (see jyske_mcp/kernel/storage.py's
+_check_schema_version), so the fixture must create them. Transactions are
+inserted directly via raw SQL (not store_transaction/categorize) so
+category_top/category_mid can be set explicitly and deterministically.
 """
 import sqlite3
 import time
 
 import pytest
 
-import jyske_mcp.storage as storage_module
-from jyske_mcp.storage import Storage
+import jyske_mcp.kernel.storage as storage_module
+from jyske_mcp.slices.finance.storage import Storage
 
 _TRANSACTIONS_DDL = """
     CREATE TABLE transactions (

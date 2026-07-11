@@ -133,7 +133,7 @@ def _seed_for_smoke_test(storage):
     import json
     import sqlite3
     import time
-    import jyske_mcp.storage as storage_module
+    import jyske_mcp.kernel.storage as storage_module
     conn = sqlite3.connect(str(storage_module._CACHE_DB))
     for i, (day, amount) in enumerate([("2020-01-05", 50.0), ("2020-01-15", 75.0)]):
         tid = f"smoke-tx-{i}"

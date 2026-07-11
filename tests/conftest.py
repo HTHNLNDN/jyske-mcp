@@ -242,14 +242,16 @@ def full_schema_storage(monkeypatch, tmp_path):
     Storage backed by a temp SQLite DB carrying the FULL current migrated
     schema (see _FULL_SCHEMA_DDL above), with the 'finance' agent row seeded
     the same way a8f633b0783b_add_provider_keys_and_agents_tables.py's data
-    migration does. Redirects Storage's module globals (_CACHE_DB,
+    migration does. Redirects the kernel storage module's globals (_CACHE_DB,
     CONFIG_DIR, _SESSION_FILE) the same way every other fixture in this
-    suite does — _db() and get_session()/save_session() re-read these at
-    call time, so this transparently redirects every Storage() instance
-    (including jyske_mcp.mcp.server's and jyske_mcp.web.app's module-level
-    ones) for the duration of the test.
+    suite does — _db() and get_session()/save_session() (both defined in
+    jyske_mcp.kernel.storage, which every Storage/FinanceStorage/
+    KernelStorage instance inherits) re-read these at call time, so this
+    transparently redirects every such instance (including
+    jyske_mcp.mcp.server's and jyske_mcp.web.app's module-level ones) for
+    the duration of the test.
     """
-    import jyske_mcp.storage as storage_module
+    import jyske_mcp.kernel.storage as storage_module
 
     db_path = tmp_path / "cache.db"
     conn = sqlite3.connect(str(db_path))
@@ -269,5 +271,5 @@ def full_schema_storage(monkeypatch, tmp_path):
     monkeypatch.setattr(storage_module, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(storage_module, "_SESSION_FILE", tmp_path / "session.json")
 
-    from jyske_mcp.storage import Storage
+    from jyske_mcp.slices.finance.storage import Storage
     return Storage()
