@@ -1,10 +1,10 @@
 # jyske-mcp
 
-An MCP server that connects Claude to your Jyske Bank account via the [Enable Banking](https://enablebanking.com) API. Gives you a finance companion that knows your actual numbers and talks to you like a person.
+A personal finance companion PWA over your Jyske Bank account via the [Enable Banking](https://enablebanking.com) API — a chat UI that knows your actual numbers and talks to you like a person.
 
 ## How it works
 
-Enable Banking handles the Open Banking consent flow and proxies requests to Jyske Bank. A scheduled sync job pulls accounts/balances/transactions into a local SQLite cache; the MCP server never talks to Enable Banking itself — it only reads from that cache (see [`src/jyske_mcp/slices/finance/tools.py`](src/jyske_mcp/slices/finance/tools.py); `src/jyske_mcp/mcp/server.py` is now just a thin re-export for the standalone MCP entrypoint below). A persistent merchant categorization database means you only have to classify a merchant once. A companion PWA (Vue 3 + Vite, served by the same FastAPI app) gives a chat UI on top of the same data.
+Enable Banking handles the Open Banking consent flow and proxies requests to Jyske Bank. A scheduled sync job pulls accounts/balances/transactions into a local SQLite cache; the chat backend never talks to Enable Banking itself — it only reads from that cache (see [`src/jyske_mcp/slices/finance/tools.py`](src/jyske_mcp/slices/finance/tools.py)). The 23 tool functions there are exposed to the chat LLM through a single registry ([`src/jyske_mcp/slices/finance/registry.py`](src/jyske_mcp/slices/finance/registry.py)); there is no standalone MCP server or Claude Desktop integration — the PWA chat is the only interface. A persistent merchant categorization database means you only have to classify a merchant once. The companion PWA itself (Vue 3 + Vite, served by the same FastAPI app) gives a chat UI on top of the same data.
 
 ## Setup
 
@@ -13,21 +13,7 @@ Enable Banking handles the Open Banking consent flow and proxies requests to Jys
 3. Run `make install` (editable install of the `src/` package + runtime dependencies, inside your venv). Contributors should use `pip install -r requirements-dev.txt` instead, which adds `pre-commit`.
 4. Run `make migrate` to create the local SQLite schema (`~/.config/mcp-bank/cache.db`) — the app does not create tables itself, so this has to happen before first run.
 5. Run `python scripts/setup_consent.py` and follow the browser flow to authorize access to your Jyske Bank account.
-6. Add the server to your Claude MCP config (see below).
-7. Copy the contents of [`src/jyske_mcp/slices/finance/prompt.md`](src/jyske_mcp/slices/finance/prompt.md) as your Claude system prompt.
-
-### MCP config
-
-```json
-{
-  "mcpServers": {
-    "jyske-bank": {
-      "command": "/path/to/jyske-mcp/.venv/bin/python",
-      "args": ["-m", "jyske_mcp.mcp.server"]
-    }
-  }
-}
-```
+6. Run `make start` (see [Web app](#web-app) below) and open the PWA — the system prompt in [`src/jyske_mcp/slices/finance/prompt.md`](src/jyske_mcp/slices/finance/prompt.md) is loaded automatically by the chat backend.
 
 ### Environment variables
 
@@ -51,7 +37,7 @@ Optional:
 
 ## Tools
 
-The MCP server exposes 23 tools, all reading from the local SQLite cache (never calling Enable Banking directly).
+The chat backend exposes 23 tools to the LLM, all reading from the local SQLite cache (never calling Enable Banking directly).
 
 **Accounts & balances**
 

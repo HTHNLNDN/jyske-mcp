@@ -1,17 +1,18 @@
 # This file must never call the Enable Banking API directly.
 # All data comes from SQLite. See jyske_mcp/kernel/sync.py for data fetching.
 #
-# The 23 finance MCP tools + the FastMCP server they're registered on.
-# Relocated out of jyske_mcp/mcp/server.py at epic deliverable #7a
+# The 23 finance tool implementations, as plain callables. Relocated out of
+# jyske_mcp/mcp/server.py at epic deliverable #7a
 # (.agent/epics/vsa-restructure-blueprint.md §4) — behavior-preserving move,
-# no logic changes. jyske_mcp/mcp/server.py now just re-exports `mcp` for the
-# `python -m jyske_mcp.mcp.server` standalone MCP entrypoint (README's Claude
-# Desktop config).
+# no logic changes. The FastMCP server these were registered on (and the
+# standalone `python -m jyske_mcp.mcp.server` Claude Desktop entrypoint) was
+# retired at epic deliverable #8 (§6) — the PWA chat loop is the interface
+# now; jyske_mcp/slices/finance/registry.py pairs each function below with
+# its Anthropic-shaped schema.
 
 import json
 from datetime import datetime, timezone, timedelta
 
-from mcp.server.fastmcp import FastMCP
 from jyske_mcp.slices.finance.storage import Storage
 from jyske_mcp.kernel.storage import SessionExpiredError
 from jyske_mcp.kernel.categorizer import categorize, top_categories
@@ -24,7 +25,6 @@ from jyske_mcp.slices.finance.spending import (
 )
 from jyske_mcp.slices.finance.recurring import _classify_recurring
 
-mcp = FastMCP("jyske-bank")
 storage = Storage()
 
 
@@ -41,7 +41,6 @@ def _validate_category(category: str) -> str | None:
 
 # ── tools ────────────────────────────────────────────────────────────────────
 
-@mcp.tool()
 def list_accounts() -> str:
     """List all bank accounts from the active consent session."""
     try:
@@ -65,7 +64,6 @@ def list_accounts() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
 def get_balances(account_uid: str = "") -> str:
     """
     Get balances for one or all accounts from local cache.
@@ -105,7 +103,6 @@ def get_balances(account_uid: str = "") -> str:
     return "\n".join(lines) if lines else "No balance data returned."
 
 
-@mcp.tool()
 def get_transactions(
     account_uid: str,
     date_from: str = "",
@@ -150,7 +147,6 @@ def get_transactions(
     return "\n".join(lines)
 
 
-@mcp.tool()
 def categorize_transaction(
     raw_name: str,
     mcc: str | None = None,
@@ -192,7 +188,6 @@ def categorize_transaction(
     return f"{top} > {mid} > {leaf}  (source={src})"
 
 
-@mcp.tool()
 def get_sync_status() -> str:
     """Returns when data was last synced. Call this as part of every opening brief."""
     last = storage.get_last_sync()
@@ -233,7 +228,6 @@ def get_sync_status() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
 def get_memory() -> str:
     """
     Always call this at the start of every session.
@@ -265,7 +259,6 @@ def get_memory() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
 def update_memory(session_summary: str, profile_updates: str | None = None) -> str:
     """
     Always call this at the end of every session.
@@ -304,14 +297,12 @@ def update_memory(session_summary: str, profile_updates: str | None = None) -> s
     return " ".join(parts)
 
 
-@mcp.tool()
 def set_budget(category: str, limit_amount: float, period: str = "monthly") -> str:
     """Set a spending budget. category must be a top-level category from data/categories.json."""
     storage.set_budget(category_top=category, limit_amount=limit_amount, period=period)
     return f"Budget set: {category} — {limit_amount:.2f} / {period}."
 
 
-@mcp.tool()
 def get_budget_status() -> str:
     """
     Get current budget status. Always call this as part of the opening brief.
@@ -325,7 +316,6 @@ def get_budget_status() -> str:
     return json.dumps(rows)
 
 
-@mcp.tool()
 def get_goals() -> str:
     """Get all active goals with progress."""
     goals = storage.get_goals(agent_id="finance")
@@ -334,7 +324,6 @@ def get_goals() -> str:
     return json.dumps([g.model_dump() for g in goals])
 
 
-@mcp.tool()
 def set_goal(name: str, target_amount: float, purpose: str, deadline: str) -> str:
     """Create a new savings or spending goal."""
     goal_id = storage.set_goal(
@@ -347,14 +336,12 @@ def set_goal(name: str, target_amount: float, purpose: str, deadline: str) -> st
     return f"Goal created (id={goal_id}): {name} — {target_amount:.2f} by {deadline}."
 
 
-@mcp.tool()
 def update_goal_progress(goal_id: int, current_amount: float) -> str:
     """Update progress on a goal."""
     storage.update_goal_progress(goal_id, current_amount)
     return f"Goal {goal_id} progress updated to {current_amount:.2f}."
 
 
-@mcp.tool()
 def get_onboarding_status() -> str:
     """Check if budget onboarding is complete. Returns current stage if not."""
     status = storage.get_onboarding(agent_id="finance")
@@ -365,7 +352,6 @@ def get_onboarding_status() -> str:
     return json.dumps({"complete": False, **status.model_dump()})
 
 
-@mcp.tool()
 def set_onboarding_stage(
     stage: str,
     income: float | None = None,
@@ -393,14 +379,12 @@ def set_onboarding_stage(
     return f"Onboarding stage set: {stage}."
 
 
-@mcp.tool()
 def complete_onboarding() -> str:
     """Mark budget onboarding as complete."""
     storage.complete_onboarding(agent_id="finance")
     return "Onboarding complete."
 
 
-@mcp.tool()
 def get_overspend_patterns() -> str:
     """Returns categories overspent 3+ consecutive months. Call monthly."""
     patterns = storage.get_overspend_patterns(agent_id="finance", consecutive_months=3)
@@ -414,7 +398,6 @@ def get_overspend_patterns() -> str:
 # listing by hand — all arithmetic happens here in Python against the SQLite
 # cache, and the tool just returns the finished numbers as JSON.
 
-@mcp.tool()
 def get_spending(
     date_from: str = "",
     date_to: str = "",
@@ -469,7 +452,6 @@ def get_spending(
     })
 
 
-@mcp.tool()
 def compare_spending(month: str = "", baseline_month: str = "", category: str = "") -> str:
     """
     Compare total spending in `month` against `baseline_month` (both "YYYY-MM").
@@ -572,7 +554,6 @@ def compare_spending(month: str = "", baseline_month: str = "", category: str = 
     })
 
 
-@mcp.tool()
 def goal_pace(goal_id: int = 0) -> str:
     """
     Compute pacing math for active goals: percent complete, whether on track
@@ -663,7 +644,6 @@ def goal_pace(goal_id: int = 0) -> str:
 # Classification math itself lives in recurring.py; these tools only wire it
 # up to Storage and the JSON-string tool-call boundary.
 
-@mcp.tool()
 def recurring_charges(lookback_days: int = 180, min_count: int = 3) -> str:
     """
     Detect recurring/subscription-like charges and frequent merchants from
@@ -709,7 +689,6 @@ def recurring_charges(lookback_days: int = 180, min_count: int = 3) -> str:
     })
 
 
-@mcp.tool()
 def confirm_recurring_status(merchant: str, status: str, currency: str = "DKK") -> str:
     """
     Record the user's answer to a cancellation-confirmation question raised
@@ -736,7 +715,6 @@ _TIP_REASON_CODES = {
 }
 
 
-@mcp.tool()
 def get_current_tip() -> str:
     """
     Returns today's financial tip of the day, if one was generated overnight.
@@ -755,7 +733,6 @@ def get_current_tip() -> str:
     })
 
 
-@mcp.tool()
 def submit_tip_feedback(tip_id: int, verdict: str, reason_text: str, reason_code: str = "") -> str:
     """
     Record the user's conversational (chat) reaction to a tip. verdict must

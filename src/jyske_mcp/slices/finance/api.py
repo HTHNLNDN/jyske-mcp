@@ -3,13 +3,14 @@ The finance slice's public interface — the only surface `platform/` code
 is allowed to import from `jyske_mcp.slices.finance` (see
 .agent/epics/vsa-restructure-blueprint.md §4).
 
-Exposes: the tool registry (TOOLS/LITELLM_TOOLS/run_tool — still three
-separate hand-maintained structures, per the epic's #7a/#8 split; see
-registry.py's docstring), the system PROMPT, the nightly run_tips/run_evals
-jobs, the post-sync snapshot_budget_history hook (from #6), the finance
-HTTP routes (`router`, moved into `routes.py` at #7b — mounted by
-`web/app.py` via `app.include_router(api.router)`), and `audit_section`
-(the finance portion of `/audit/data`, also from #7b).
+Exposes: TOOL_REGISTRY (the single ToolSpec-derived schema/dispatch source
+— see registry.py's docstring; epic deliverable #8 collapsed the old
+TOOLS/LITELLM_TOOLS/run_tool three-way split into this one object), the
+system PROMPT, the nightly run_tips/run_evals jobs, the post-sync
+snapshot_budget_history hook (from #6), the finance HTTP routes (`router`,
+moved into `routes.py` at #7b — mounted by `web/app.py` via
+`app.include_router(api.router)`), and `audit_section` (the finance portion
+of `/audit/data`, also from #7b).
 
 `goal_pace` is no longer re-exported here — the only caller outside the
 chat tool-dispatch path was app.py's /goals route, and that route moved
@@ -20,7 +21,7 @@ sibling import instead. See routes.py's `goals()`.
 from pathlib import Path
 
 from jyske_mcp.slices.finance.storage import Storage
-from jyske_mcp.slices.finance.registry import TOOLS, LITELLM_TOOLS, run_tool
+from jyske_mcp.slices.finance.registry import TOOL_REGISTRY
 from jyske_mcp.slices.finance.routes import router
 from jyske_mcp.slices.finance.tips import run_tips
 from jyske_mcp.slices.finance.evals import run_evals

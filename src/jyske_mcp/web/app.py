@@ -41,11 +41,11 @@ load_dotenv(ENV_FILE)
 # routes (mounted below), and the finance portion of /audit/data all come
 # from the finance slice's public api.py — platform never reaches into
 # slice internals for these (see .agent/epics/vsa-restructure-blueprint.md
-# §4/§6).
+# §4/§6). TOOL_REGISTRY is the single ToolSpec-derived source for both the
+# LiteLLM tool schema and the name->callable dispatch (epic deliverable #8).
 from jyske_mcp.slices.finance.api import (
     PROMPT as SYSTEM_PROMPT,
-    LITELLM_TOOLS,
-    run_tool,
+    TOOL_REGISTRY,
     router as finance_router,
     audit_section as finance_audit_section,
 )
@@ -351,7 +351,7 @@ def chat(req: ChatRequest):
                         model=llm_cfg.model,
                         api_key=llm_cfg.api_key,
                         stream=True,
-                        tools=LITELLM_TOOLS,
+                        tools=TOOL_REGISTRY.litellm_schemas(),
                         max_tokens=8096,
                         trace_id=trace_id,
                         user_id=chat_user_id,
@@ -434,7 +434,7 @@ def chat(req: ChatRequest):
                         # which can carry balances/IBANs/merchant detail.
                         _chat_log.info("  TOOL[%d] %s", iteration, c["name"])
                         tool_span = start_tool_span(trace_id, c["name"], args)
-                        result = run_tool(c["name"], args)
+                        result = TOOL_REGISTRY.dispatch(c["name"], args)
                         end_tool_span(tool_span, result)
                         _chat_log.info("  RESULT: <%d chars>", len(str(result)))
                         messages.append({

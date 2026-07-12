@@ -1,16 +1,20 @@
 """
-The finance slice's chat tool-call registry: the Anthropic-shaped schema
-list (TOOLS), its LiteLLM/OpenAI-function-calling translation
-(LITELLM_TOOLS), and the name->callable dispatcher (run_tool) the chat loop
-uses to actually execute a tool call.
+The finance slice's chat tool-call registry: a single ToolSpec/ToolRegistry
+source deriving the Anthropic-shaped schema list, its LiteLLM/OpenAI
+function-calling translation, and the name->callable dispatcher the chat
+loop uses to actually execute a tool call.
 
 Relocated out of jyske_mcp/web/app.py at epic deliverable #7a
-(.agent/epics/vsa-restructure-blueprint.md §4/§6) — behavior-preserving move,
-no logic changes. Deliberately still three separate hand-maintained
-structures (TOOLS, LITELLM_TOOLS, run_tool's dispatch table) rather than one
-derived registry — collapsing them into a single ToolSpec source is epic
-deliverable #8, not this move.
+(.agent/epics/vsa-restructure-blueprint.md §4/§6) as three separate
+hand-maintained structures (TOOLS, LITELLM_TOOLS, run_tool's dispatch
+table); collapsed into this single TOOL_REGISTRY at epic deliverable #8
+(§3/§6) — the LiteLLM schema and the dispatch table are now both generated
+from the same ToolSpec list instead of hand-maintained in parallel.
 """
+
+import inspect
+from dataclasses import dataclass
+from typing import Callable
 
 from jyske_mcp.slices.finance.tools import (
     list_accounts,
@@ -38,29 +42,101 @@ from jyske_mcp.slices.finance.tools import (
     submit_tip_feedback,
 )
 
-TOOLS = [
-    {
-        "name": "get_memory",
-        "description": (
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """One MCP tool's Anthropic-shaped schema paired with the Python
+    callable that implements it — the single hand-maintained unit that
+    TOOLS/LITELLM_TOOLS/run_tool's dispatch dict collapse into (epic
+    deliverable #8, .agent/epics/vsa-restructure-blueprint.md §3/§6)."""
+
+    name: str
+    description: str
+    input_schema: dict
+    handler: Callable[..., str]
+
+
+class ToolRegistry:
+    """An ordered list of ToolSpec — the single source the Anthropic schema,
+    the LiteLLM/OpenAI schema, and the dispatch table all derive from."""
+
+    def __init__(self, specs: list[ToolSpec]):
+        self._specs = list(specs)
+        self._by_name = {s.name: s for s in self._specs}
+
+    def anthropic_schemas(self) -> list[dict]:
+        """Reproduces the old TOOLS shape exactly: {name, description,
+        input_schema} per spec, same order."""
+        return [
+            {"name": s.name, "description": s.description, "input_schema": s.input_schema}
+            for s in self._specs
+        ]
+
+    def litellm_schemas(self) -> list[dict]:
+        """Reproduces the old LITELLM_TOOLS shape exactly. LiteLLM (and
+        every non-Anthropic provider it talks to) expects tools in OpenAI's
+        function-calling shape, not Anthropic's {name, description,
+        input_schema}; litellm re-translates this back into the Anthropic
+        tool format under the hood when LLM_MODEL is a Claude model, so this
+        one derived list keeps working across providers."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": s.name,
+                    "description": s.description,
+                    "parameters": s.input_schema,
+                },
+            }
+            for s in self._specs
+        ]
+
+    def dispatch(self, name: str, inputs: dict) -> str:
+        """Reproduces the old run_tool exactly: unknown name -> "Unknown
+        tool: {name}"; handler raising -> "Tool error ({name}): {e}"; the
+        zero-arg-vs-kwargs split is driven off the handler's own signature
+        being empty or not (today's 9 zero-arg tools have no params and
+        ignore whatever `inputs` was passed; the rest take **inputs).
+
+        Deliberately kept at two args (name, inputs) — threading agent_id
+        through is epic deliverable #9, not this one; today's hardcoded
+        "finance" scoping inside each tool is preserved unchanged."""
+        spec = self._by_name.get(name)
+        if spec is None:
+            return f"Unknown tool: {name}"
+        try:
+            if inspect.signature(spec.handler).parameters:
+                return spec.handler(**inputs)
+            return spec.handler()
+        except Exception as e:
+            return f"Tool error ({name}): {e}"
+
+
+TOOL_REGISTRY = ToolRegistry([
+    ToolSpec(
+        name="get_memory",
+        description=(
             "Always call this at the start of every session.\n"
             "Returns the user profile (goals, preferences, known patterns)\n"
             "and the last 3 session summaries in a compact format."
         ),
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "list_accounts",
-        "description": "List all bank accounts from the active consent session.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_balances",
-        "description": (
+        input_schema={"type": "object", "properties": {}},
+        handler=get_memory,
+    ),
+    ToolSpec(
+        name="list_accounts",
+        description="List all bank accounts from the active consent session.",
+        input_schema={"type": "object", "properties": {}},
+        handler=list_accounts,
+    ),
+    ToolSpec(
+        name="get_balances",
+        description=(
             "Get balances for one or all accounts.\n"
             "Leave account_uid empty to fetch all accounts.\n"
             "Use list_accounts to find account UIDs."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "account_uid": {
@@ -69,15 +145,16 @@ TOOLS = [
                 }
             },
         },
-    },
-    {
-        "name": "get_transactions",
-        "description": (
+        handler=get_balances,
+    ),
+    ToolSpec(
+        name="get_transactions",
+        description=(
             "Get transactions for an account.\n"
             "Use list_accounts to find account UIDs.\n"
             "date_from and date_to are optional ISO dates (YYYY-MM-DD); defaults to last 30 days."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "account_uid": {
@@ -95,10 +172,11 @@ TOOLS = [
             },
             "required": ["account_uid"],
         },
-    },
-    {
-        "name": "categorize_transaction",
-        "description": (
+        handler=get_transactions,
+    ),
+    ToolSpec(
+        name="categorize_transaction",
+        description=(
             "Categorize a merchant by name and optional MCC code.\n\n"
             "Two-step flow:\n"
             "  - Call without llm_category: tries merchant cache then MCC lookup.\n"
@@ -107,7 +185,7 @@ TOOLS = [
             '  - Call with llm_category (format "Top > Mid > Leaf"): stores the\n'
             "    LLM-derived category and returns it."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "raw_name": {
@@ -125,20 +203,22 @@ TOOLS = [
             },
             "required": ["raw_name"],
         },
-    },
-    {
-        "name": "get_sync_status",
-        "description": "Returns when data was last synced. Call this as part of every opening brief.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_budget",
-        "description": (
+        handler=categorize_transaction,
+    ),
+    ToolSpec(
+        name="get_sync_status",
+        description="Returns when data was last synced. Call this as part of every opening brief.",
+        input_schema={"type": "object", "properties": {}},
+        handler=get_sync_status,
+    ),
+    ToolSpec(
+        name="set_budget",
+        description=(
             "Set a spending budget for a category.\n"
             "category must be a top-level category name from the taxonomy.\n"
             "period defaults to 'monthly'. Replaces any existing budget for that category+period."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "category": {
@@ -156,15 +236,17 @@ TOOLS = [
             },
             "required": ["category", "limit_amount"],
         },
-    },
-    {
-        "name": "get_budget_status",
-        "description": "Get current budget status. Always call this as part of the opening brief.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "update_memory",
-        "description": (
+        handler=set_budget,
+    ),
+    ToolSpec(
+        name="get_budget_status",
+        description="Get current budget status. Always call this as part of the opening brief.",
+        input_schema={"type": "object", "properties": {}},
+        handler=get_budget_status,
+    ),
+    ToolSpec(
+        name="update_memory",
+        description=(
             "Always call this at the end of every session.\n"
             "session_summary: 2-3 sentence plain language summary of what happened this session.\n"
             "profile_updates: JSON string of profile keys to update. Valid keys:\n"
@@ -174,7 +256,7 @@ TOOLS = [
             "Goals are no longer stored here — use set_goal / update_goal_progress.\n"
             "Only include keys that actually changed this session."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "session_summary": {
@@ -188,16 +270,18 @@ TOOLS = [
             },
             "required": ["session_summary"],
         },
-    },
-    {
-        "name": "get_goals",
-        "description": "Get all active goals with progress.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_goal",
-        "description": "Create a new savings or spending goal.",
-        "input_schema": {
+        handler=update_memory,
+    ),
+    ToolSpec(
+        name="get_goals",
+        description="Get all active goals with progress.",
+        input_schema={"type": "object", "properties": {}},
+        handler=get_goals,
+    ),
+    ToolSpec(
+        name="set_goal",
+        description="Create a new savings or spending goal.",
+        input_schema={
             "type": "object",
             "properties": {
                 "name": {
@@ -219,11 +303,12 @@ TOOLS = [
             },
             "required": ["name", "target_amount", "purpose", "deadline"],
         },
-    },
-    {
-        "name": "update_goal_progress",
-        "description": "Update progress on a goal.",
-        "input_schema": {
+        handler=set_goal,
+    ),
+    ToolSpec(
+        name="update_goal_progress",
+        description="Update progress on a goal.",
+        input_schema={
             "type": "object",
             "properties": {
                 "goal_id": {
@@ -237,20 +322,22 @@ TOOLS = [
             },
             "required": ["goal_id", "current_amount"],
         },
-    },
-    {
-        "name": "get_onboarding_status",
-        "description": "Check if budget onboarding is complete. Returns current stage if not.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_onboarding_stage",
-        "description": (
+        handler=update_goal_progress,
+    ),
+    ToolSpec(
+        name="get_onboarding_status",
+        description="Check if budget onboarding is complete. Returns current stage if not.",
+        input_schema={"type": "object", "properties": {}},
+        handler=get_onboarding_status,
+    ),
+    ToolSpec(
+        name="set_onboarding_stage",
+        description=(
             "Record progress through budget onboarding. Call once per stage as the user answers.\n"
             "Only pass the fields relevant to the stage just completed; stage moves the\n"
             "onboarding record to the next step ('income' -> 'fixed_costs' -> 'savings' -> 'style' -> 'complete')."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "stage": {
@@ -292,25 +379,28 @@ TOOLS = [
             },
             "required": ["stage"],
         },
-    },
-    {
-        "name": "complete_onboarding",
-        "description": "Mark budget onboarding as complete.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_overspend_patterns",
-        "description": "Returns categories overspent 3+ consecutive months. Call monthly.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_spending",
-        "description": (
+        handler=set_onboarding_stage,
+    ),
+    ToolSpec(
+        name="complete_onboarding",
+        description="Mark budget onboarding as complete.",
+        input_schema={"type": "object", "properties": {}},
+        handler=complete_onboarding,
+    ),
+    ToolSpec(
+        name="get_overspend_patterns",
+        description="Returns categories overspent 3+ consecutive months. Call monthly.",
+        input_schema={"type": "object", "properties": {}},
+        handler=get_overspend_patterns,
+    ),
+    ToolSpec(
+        name="get_spending",
+        description=(
             "Sum spending (debits only) between two ISO dates.\n"
             "Defaults date_from/date_to to the current calendar month if left empty.\n"
             "Use this instead of summing a get_transactions listing by hand."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "date_from": {
@@ -335,15 +425,16 @@ TOOLS = [
                 },
             },
         },
-    },
-    {
-        "name": "compare_spending",
-        "description": (
+        handler=get_spending,
+    ),
+    ToolSpec(
+        name="compare_spending",
+        description=(
             "Compare total spending in one month against a baseline month (both 'YYYY-MM').\n"
             "Defaults month to the current calendar month and baseline_month to the month before it.\n"
             "Use this instead of eyeballing two get_transactions listings."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "month": {
@@ -360,15 +451,16 @@ TOOLS = [
                 },
             },
         },
-    },
-    {
-        "name": "goal_pace",
-        "description": (
+        handler=compare_spending,
+    ),
+    ToolSpec(
+        name="goal_pace",
+        description=(
             "Compute pacing math for active goals: percent complete, whether on track\n"
             "for the deadline, and the daily/monthly amount required to still hit it.\n"
             "goal_id = 0 (default) means all active goals."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "goal_id": {
@@ -377,15 +469,16 @@ TOOLS = [
                 },
             },
         },
-    },
-    {
-        "name": "recurring_charges",
-        "description": (
+        handler=goal_pace,
+    ),
+    ToolSpec(
+        name="recurring_charges",
+        description=(
             "Detect recurring/subscription-like charges and frequent merchants from\n"
             "transaction history. Flags merchants that have gone quiet (needs_confirmation)\n"
             "so the agent can ask the user whether they cancelled it."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "lookback_days": {
@@ -398,14 +491,15 @@ TOOLS = [
                 },
             },
         },
-    },
-    {
-        "name": "confirm_recurring_status",
-        "description": (
+        handler=recurring_charges,
+    ),
+    ToolSpec(
+        name="confirm_recurring_status",
+        description=(
             "Record the user's answer to a cancellation-confirmation question raised by\n"
             "recurring_charges (needs_confirmation: true). status must be 'active', 'cancelled', or 'unknown'."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "merchant": {
@@ -423,25 +517,27 @@ TOOLS = [
             },
             "required": ["merchant", "status"],
         },
-    },
-    {
-        "name": "get_current_tip",
-        "description": (
+        handler=confirm_recurring_status,
+    ),
+    ToolSpec(
+        name="get_current_tip",
+        description=(
             "Returns today's financial tip of the day, if one was generated overnight.\n"
             "Call this opportunistically — as part of the opening brief, or whenever\n"
             "the user's message could plausibly be reacting to a tip."
         ),
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "submit_tip_feedback",
-        "description": (
+        input_schema={"type": "object", "properties": {}},
+        handler=get_current_tip,
+    ),
+    ToolSpec(
+        name="submit_tip_feedback",
+        description=(
             "Record the user's conversational reaction to a tip. verdict must be\n"
             "'accepted' or 'rejected' — always call this with an explicit verdict when\n"
             "the user pushes back on or endorses a tip. reason_text is required: capture\n"
             "the user's actual words/reasoning, never just the verdict."
         ),
-        "input_schema": {
+        input_schema={
             "type": "object",
             "properties": {
                 "tip_id": {
@@ -466,62 +562,6 @@ TOOLS = [
             },
             "required": ["tip_id", "verdict", "reason_text"],
         },
-    },
-]
-
-
-# LiteLLM (and every non-Anthropic provider it talks to) expects tools in
-# OpenAI's function-calling shape, not Anthropic's {name, description,
-# input_schema}. Convert once at import time; litellm re-translates this
-# into the Anthropic tool format under the hood when LLM_MODEL is a Claude
-# model, so a single TOOLS list keeps working across providers.
-def _tools_for_litellm(tools: list[dict]) -> list[dict]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["input_schema"],
-            },
-        }
-        for t in tools
-    ]
-
-
-LITELLM_TOOLS = _tools_for_litellm(TOOLS)
-
-
-def run_tool(name: str, inputs: dict) -> str:
-    dispatch = {
-        "get_memory":             lambda i: get_memory(),
-        "list_accounts":          lambda i: list_accounts(),
-        "get_balances":           lambda i: get_balances(**i),
-        "get_transactions":       lambda i: get_transactions(**i),
-        "categorize_transaction": lambda i: categorize_transaction(**i),
-        "get_sync_status":        lambda i: get_sync_status(),
-        "set_budget":             lambda i: set_budget(**i),
-        "get_budget_status":      lambda i: get_budget_status(),
-        "update_memory":          lambda i: update_memory(**i),
-        "get_goals":              lambda i: get_goals(),
-        "set_goal":               lambda i: set_goal(**i),
-        "update_goal_progress":   lambda i: update_goal_progress(**i),
-        "get_onboarding_status":  lambda i: get_onboarding_status(),
-        "set_onboarding_stage":   lambda i: set_onboarding_stage(**i),
-        "complete_onboarding":    lambda i: complete_onboarding(),
-        "get_overspend_patterns": lambda i: get_overspend_patterns(),
-        "get_spending":           lambda i: get_spending(**i),
-        "compare_spending":       lambda i: compare_spending(**i),
-        "goal_pace":              lambda i: goal_pace(**i),
-        "recurring_charges":      lambda i: recurring_charges(**i),
-        "confirm_recurring_status": lambda i: confirm_recurring_status(**i),
-        "get_current_tip":        lambda i: get_current_tip(),
-        "submit_tip_feedback":    lambda i: submit_tip_feedback(**i),
-    }
-    fn = dispatch.get(name)
-    if fn is None:
-        return f"Unknown tool: {name}"
-    try:
-        return fn(inputs)
-    except Exception as e:
-        return f"Tool error ({name}): {e}"
+        handler=submit_tip_feedback,
+    ),
+])

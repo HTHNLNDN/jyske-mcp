@@ -17,3 +17,7 @@ static/dist/
 *.db
 *.sqlite*
 CLAUDE.md
+.*
+!.gitignore
+!.env.example
+!.pre-commit-config.yaml

@@ -1,7 +1,8 @@
 """
-Characterization tests (golden master) for the three MCP aggregation tools
-in jyske_mcp/slices/finance/tools.py: get_spending, compare_spending, goal_pace.
-Called directly as functions (never through FastMCP transport) per this
+Characterization tests (golden master) for the three chat-tool aggregation
+functions in jyske_mcp/slices/finance/tools.py: get_spending,
+compare_spending, goal_pace. Called directly as plain functions (there is
+no MCP transport — see epic deliverable #8, FastMCP was retired) per this
 suite's existing convention (see tests/test_goal_pace.py,
 tests/test_mixed_currency_no_blend.py).
 
