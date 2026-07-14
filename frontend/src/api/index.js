@@ -58,4 +58,10 @@ export const api = {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ transaction_id: transactionId, category_top: categoryTop, category_mid: categoryMid }),
   }).then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data }))),
+  createBudget: (categoryTop, categoryMid, limitAmount, period) => fetch('/budgets', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ category_top: categoryTop, category_mid: categoryMid, limit_amount: limitAmount, period }),
+  }).then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data }))),
+  deleteBudget: (budgetId) => fetch(`/budgets/${budgetId}`, { method: 'DELETE' })
+    .then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data }))),
 }

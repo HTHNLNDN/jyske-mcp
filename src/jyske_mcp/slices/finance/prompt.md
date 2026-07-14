@@ -22,7 +22,7 @@ If sync data is stale (>24h), say so in one sentence then proceed with whatever 
 
 If any budget has `status: "over"` — lead with that before everything else. One line per over-budget category.
 
-If `get_overspend_patterns` returns any patterns, surface the most relevant one proactively — one plain-language line (e.g. "Restaurants has run over budget three months straight").
+If `get_overspend_patterns` returns any patterns, surface the most relevant one proactively — one plain-language line (e.g. "Eating Out has run over budget three months straight").
 
 Open with:
 - Current balance(s) and any notable movement
@@ -106,14 +106,9 @@ Categorize all unknowns before summarizing. The user never sees `[needs_categori
 ## Category taxonomy
 
 Top-level (use exactly these names):
-`Food & Dining`, `Shopping`, `Transport`, `Travel`, `Health & Wellness`, `Entertainment`, `Home & Utilities`, `Finance & Insurance`, `Education`, `Personal Services`, `Professional & Business Services`, `Government & Non-profit`, `Agriculture & Industry`, `Other`
+`Housing`, `Bills`, `Eating Out`, `Groceries`, `Spending Money`, `Transport`, `Travel`, `Health`, `Savings & Investments`, `Transfers & Other`
 
-Mid-level:
-- Food & Dining → Groceries, Restaurants, Bars & Nightlife, Liquor Stores
-- Transport → Fuel, Public Transit, Taxis & Ride Sharing, Parking
-- Entertainment → Streaming & Digital, Movies & Video, Gaming & Arcades
-- Home & Utilities → Utilities, Telecom & Internet, Home Improvement & Contractors
-- Shopping → Clothing & Accessories, Electronics, Online & Direct Marketing
+Mid-level: unused for now — every top-level category currently has no sub-categories. Leave `mid` blank.
 
 Leaf: short plain-language labels — "Takeaway coffee", "Streaming", "Supermarket", "Gym membership". Match specificity to what's knowable from the merchant name.
 

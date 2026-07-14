@@ -213,7 +213,7 @@ class KernelStorage:
         self,
         raw_name: str,
         category_top: str,
-        category_mid: str,
+        category_mid: str | None,
         category_leaf: str,
         resolved_name: str = "",
         mcc: str = "",
@@ -237,7 +237,7 @@ class KernelStorage:
             conn.close()
 
     def recategorize_from_transaction(
-        self, transaction_id: int, category_top: str, category_mid: str
+        self, transaction_id: int, category_top: str, category_mid: str | None
     ) -> dict[str, Any] | None:
         """
         User-driven correction: reassign a merchant's category from one of
@@ -411,9 +411,9 @@ class KernelStorage:
         )
 
         # Persist the resolved category onto the row so budget queries can read it
-        # directly. categorize() checks the merchant cache then MCC lookup, and
-        # returns None when only an LLM can classify — those rows are filled in
-        # later by the sync's batch categorizer (which writes the merchants table).
+        # directly. categorize() checks the merchant cache and returns None when
+        # only an LLM can classify — those rows are filled in later by the
+        # sync's batch categorizer (which writes the merchants table).
         if tid is not None:
             cat = categorize(description, mcc, self, conn=conn)
             if cat is not None:

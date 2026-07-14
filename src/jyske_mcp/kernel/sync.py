@@ -13,7 +13,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from jyske_mcp.kernel.auth import auth_headers, BASE_URL, HTTP_TIMEOUT
-from jyske_mcp.kernel.categorizer import categorize
+from jyske_mcp.kernel.categorizer import categorize, category_tree, validate_category_pair
 from jyske_mcp.kernel.llm import simple_completion
 from jyske_mcp.kernel.storage import KernelStorage, SessionExpiredError
 
@@ -86,24 +86,44 @@ def _batch_categorize(items: list[dict], storage: KernelStorage) -> None:
     Hardcoded to Haiku regardless of LLM_MODEL — fast and cheap for a
     straightforward classification task, and this is a cost-sensitive
     background job rather than the user-facing chat model.
-    Stores each result via storage.merchant_set.
+
+    Prevention: the prompt embeds category_tree()'s full top -> [mid, ...]
+    taxonomy and instructs the LLM to pick `mid` only from its chosen
+    top's own list (or leave it blank) — this is unattended (no user in
+    the loop to correct a bad output), so the mid label must already be
+    real by construction as much as the prompt can make it.
+
+    Backstop: every parsed result is still re-checked against
+    validate_category_pair() before being cached, since an LLM can ignore
+    prompt instructions. An invalid `top` means the whole row is skipped —
+    never cached with a null/invalid top, leaving it for a future LLM pass
+    to categorize this merchant correctly. An invalid `mid` is coerced to
+    real SQL NULL (not "") and `top`/`leaf` are still stored.
     """
     if not items:
         return
 
+    # MCC is deliberately NOT included here (per the custom-categorization
+    # epic's decision to drop MCC entirely, not just the deterministic
+    # lookup index) -- only the merchant name is given to the LLM.
     merchants_json = json.dumps(
-        [{"raw_name": i["raw_name"], "mcc": i.get("mcc")} for i in items],
+        [{"raw_name": i["raw_name"]} for i in items],
         ensure_ascii=False,
     )
+    tree = category_tree()
+    tree_json = json.dumps(tree, ensure_ascii=False)
+    top_list = ", ".join(tree.keys())
 
     prompt = (
         "Categorize each merchant in the list below. "
         "Return ONLY a JSON array — one object per merchant, same order as input. "
         'Each object: {"raw_name": "...", "top": "...", "mid": "...", "leaf": "..."}\n\n'
         "Use exactly these top-level categories:\n"
-        "Food & Dining, Shopping, Transport, Travel, Health & Wellness, Entertainment, "
-        "Home & Utilities, Finance & Insurance, Education, Personal Services, "
-        "Professional & Business Services, Government & Non-profit, Agriculture & Industry, Other\n\n"
+        f"{top_list}\n\n"
+        "For `mid`, pick only from that top category's own sub-category list below "
+        "(the full top -> [mid, ...] taxonomy) — never invent a new mid label. "
+        'Leave mid as "" if none of that top\'s sub-categories fit:\n'
+        f"{tree_json}\n\n"
         f"Merchants:\n{merchants_json}"
     )
 
@@ -113,15 +133,34 @@ def _batch_categorize(items: list[dict], storage: KernelStorage) -> None:
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
         results = json.loads(text)
+        stored = 0
         for item in results:
+            top = item["top"]
+            mid = item.get("mid") or None
+            top_valid, mid_valid = validate_category_pair(top, mid)
+            if not top_valid:
+                log.warning(
+                    "LLM produced unknown top-level category %r for merchant %r — "
+                    "not caching, leaving it for a future LLM pass",
+                    top, item["raw_name"],
+                )
+                continue
+            if not mid_valid:
+                log.warning(
+                    "LLM produced unknown mid-level category %r under top %r for "
+                    "merchant %r — coercing mid to NULL",
+                    mid, top, item["raw_name"],
+                )
+                mid = None
             storage.merchant_set(
                 raw_name=item["raw_name"],
-                category_top=item["top"],
-                category_mid=item["mid"],
+                category_top=top,
+                category_mid=mid,
                 category_leaf=item["leaf"],
                 source="llm",
             )
-        log.info("LLM categorized %d merchants", len(results))
+            stored += 1
+        log.info("LLM categorized %d/%d merchants", stored, len(results))
     except Exception as e:
         log.error("Batch categorization failed: %s", e)
 

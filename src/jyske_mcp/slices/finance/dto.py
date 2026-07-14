@@ -69,10 +69,14 @@ class BudgetStatusDTO(BaseModel):
     (FinanceStorage.get_budget_status). spent/percent/status are
     PRIMARY_CURRENCY (DKK) only; other_currency_amounts surfaces non-DKK
     spend separately and MUST be omitted entirely (not `null`) when there
-    is none — see module docstring and to_dict() below."""
+    is none — see module docstring and to_dict() below.
+
+    id is the underlying budgets.id row id — the frontend needs it to call
+    DELETE /budgets/{id} on a specific row."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    id: int
     category: str
     category_mid: str | None
     spent: float

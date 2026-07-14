@@ -92,7 +92,12 @@ def test_budgets_status_pins_dkk_primary_and_other_currency_shape(full_schema_st
     by_category = {b["category"]: b for b in body["budgets"]}
     assert set(by_category) == {"Food & Dining", "Transport"}
 
+    # `id` (the underlying budgets.id row id, needed by the frontend to call
+    # DELETE /budgets/{id}) is asserted separately as "some int" rather than
+    # hardcoded — everything else about the shape is still pinned exactly.
     food = by_category["Food & Dining"]
+    food_id = food.pop("id")
+    assert isinstance(food_id, int)
     assert food == {
         "category": "Food & Dining",
         "category_mid": None,
@@ -105,6 +110,9 @@ def test_budgets_status_pins_dkk_primary_and_other_currency_shape(full_schema_st
     }
 
     transport = by_category["Transport"]
+    transport_id = transport.pop("id")
+    assert isinstance(transport_id, int)
+    assert transport_id != food_id
     assert transport == {
         "category": "Transport",
         "category_mid": None,

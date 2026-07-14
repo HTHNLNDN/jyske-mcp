@@ -101,7 +101,7 @@ const renderedHtml = computed(() => {
 <template>
   <div :class="message.role === 'user' ? 'flex justify-end' : 'flex flex-col items-start'">
     <!-- Budget card — assistant message that parses as a budget JSON array -->
-    <BudgetCard v-if="budget" :budgets="budget" />
+    <BudgetCard v-if="budget" :budgets="budget" :editable="false" />
 
     <!-- Agent not configured (no model / no provider key) — a distinct
          inline notice, not a normal reply bubble, with a way to fix it. -->

@@ -191,6 +191,24 @@ class FinanceStorage(KernelStorage):
             for r in rows
         ]
 
+    def deactivate_budget(self, budget_id: int, agent_id: str = "finance") -> bool:
+        """Soft-deletes (active=0). Returns True if a row was actually
+        deactivated (existed, was active, matched agent_id), False
+        otherwise -- the caller needs this to return 404 vs 200. Unlike
+        deactivate_goal (below), this filters by agent_id too, since it's
+        reachable from an authenticated HTTP route (defense in depth
+        against an id from a different agent scope, even though only one
+        agent exists today)."""
+        conn = self._db()
+        cur = conn.execute(
+            "UPDATE budgets SET active = 0 WHERE id = ? AND agent_id = ? AND active = 1",
+            (budget_id, agent_id),
+        )
+        conn.commit()
+        changed = cur.rowcount > 0
+        conn.close()
+        return changed
+
     def current_month_window(self) -> tuple[str, str]:
         """(month_start, today) as ISO dates -- the single source of truth for
         the 'this month' budget window, shared by get_budget_status and the
@@ -231,14 +249,14 @@ class FinanceStorage(KernelStorage):
 
         conn = self._db()
         budget_rows = conn.execute(
-            "SELECT category_top, category_mid, limit_amount, period "
+            "SELECT id, category_top, category_mid, limit_amount, period "
             "FROM budgets WHERE active = 1 AND agent_id = ?",
             (agent_id,),
         ).fetchall()
         conn.close()
 
         result = []
-        for cat_top, cat_mid, limit_amount, period in budget_rows:
+        for budget_id, cat_top, cat_mid, limit_amount, period in budget_rows:
             if cat_mid:
                 # Mid-level budget: don't reuse the top-level aggregate above
                 # (that would blend in every other sub-category under the
@@ -269,6 +287,7 @@ class FinanceStorage(KernelStorage):
                 status = "over"
 
             dto = BudgetStatusDTO(
+                id=budget_id,
                 category=cat_top,
                 category_mid=cat_mid,
                 spent=spent,

@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 
 from jyske_mcp.slices.finance.storage import Storage
 from jyske_mcp.kernel.storage import SessionExpiredError
-from jyske_mcp.kernel.categorizer import categorize, top_categories
+from jyske_mcp.kernel.categorizer import categorize, top_categories, category_tree, validate_category_pair
 from jyske_mcp.kernel.dto import AccountDTO, BalanceSnapshotDTO
 from jyske_mcp.slices.finance.spending import (
     _month_bounds,
@@ -156,7 +156,7 @@ def categorize_transaction(
     Categorize a merchant by name and optional MCC code.
 
     Two-step flow:
-      - Call without llm_category: tries merchant cache then MCC lookup.
+      - Call without llm_category: tries the merchant cache.
         Returns the category on hit, or {"needs_llm": true, "raw_name": ...}
         to signal that Claude should determine the category and call again.
       - Call with llm_category (format "Top > Mid > Leaf"): stores the
@@ -167,6 +167,15 @@ def categorize_transaction(
         if len(parts) != 3:
             return "llm_category must be in format 'Top > Mid > Leaf'"
         top, mid, leaf = parts
+        # Interactive chat-tool call — the calling Claude can retry in the
+        # same turn, so give it feedback instead of silently coercing (unlike
+        # the unattended nightly-sync path in kernel/sync.py, which coerces).
+        top_valid, mid_valid = validate_category_pair(top, mid)
+        if not top_valid:
+            return _validate_category(top)
+        if not mid_valid:
+            valid_mids = ", ".join(category_tree()[top])
+            return f"Unknown category_mid {mid!r} for {top!r}. Valid mids: {valid_mids}."
         storage.merchant_set(
             raw_name=raw_name,
             category_top=top,

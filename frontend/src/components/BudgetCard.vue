@@ -5,6 +5,12 @@ import { useBudgetsStore } from '../stores/budgets'
 
 defineProps({
   budgets: { type: Array, required: true },
+  // Gates the delete/stop-tracking control. Defaults on for the live
+  // dashboard widget; passed false by callers that reuse this component to
+  // render a read-only/historical snapshot (AgentDataAudit.vue's audit view,
+  // MessageBubble.vue's chat-transcript budget snapshots) — a one-tap
+  // destructive action doesn't belong in a scrollback or audit context.
+  editable: { type: Boolean, default: true },
 })
 
 const store = useBudgetsStore()
@@ -22,8 +28,16 @@ const openMid = reactive({})
 const openFlag = reactive({})
 const pickers = reactive({})
 
+// Delete/stop-tracking state per budget row — same keyed-reactive-object
+// pattern as pickers/openFlag above, keyed by budget row id.
+const rowState = reactive({})
+
 function midKey(category, entry) {
   return `${category}::${entry.uncategorized ? '__uncat__' : entry.category_mid}`
+}
+
+function categoryLabel(row) {
+  return row.category_mid !== null ? `${row.category} · ${row.category_mid}` : row.category
 }
 
 function toggleFlag(tx) {
@@ -44,13 +58,16 @@ function onPickerTopChange(tx) {
 
 async function savePicker(tx) {
   const picker = pickers[tx.id]
-  if (!picker || !picker.top || !picker.mid || picker.saving) return
+  if (!picker || !picker.top || picker.saving) return
   picker.saving = true
   picker.error = ''
   const res = await store.recategorize({
     transactionId: tx.id,
     categoryTop: picker.top,
-    categoryMid: picker.mid,
+    // mid is optional -- some top-level categories (all of the new
+    // custom-categorization taxonomy, for now) have no sub-categories at
+    // all, same "" -> null conversion BudgetForm.vue already uses.
+    categoryMid: picker.mid || null,
   })
   picker.saving = false
   if (!res.ok) {
@@ -80,6 +97,20 @@ function toggleMid(category, entry) {
   if (willOpen) store.loadLineItems(category, entry.category_mid, entry.uncategorized)
 }
 
+// Deletes/stops tracking a budget row immediately on click — no confirm()
+// dialog, matching ApiKeysSettings.vue's clearKey() convention. Failures
+// show an inline error instead of silently doing nothing.
+async function deleteBudget(row) {
+  if (rowState[row.id]?.saving) return
+  rowState[row.id] = { saving: true, error: '' }
+  const res = await store.deleteBudget(row.id)
+  if (!res.ok) {
+    rowState[row.id] = { saving: false, error: res.data?.detail || 'Could not delete — check your connection and try again.' }
+    return
+  }
+  rowState[row.id] = { saving: false, error: '' }
+}
+
 function currentMonth() {
   return new Date().toLocaleString('en-US', { month: 'long' })
 }
@@ -95,26 +126,46 @@ function currentMonth() {
     </div>
     <div class="relative px-4 py-3 space-y-4">
       <div v-for="(row, ri) in budgets" :key="ri">
+        <div class="flex justify-between items-baseline mb-1.5 gap-2">
+          <button
+            type="button"
+            class="flex-1 min-w-0 flex items-center gap-1 text-sm text-ink text-left"
+            :class="row.category_mid === null ? 'cursor-pointer' : 'cursor-default'"
+            @click="toggleCat(row)"
+          >
+            <span
+              v-if="row.category_mid === null"
+              class="font-mono text-fog transition-transform duration-150 flex-shrink-0"
+              :class="openCat === row.category ? 'rotate-90' : ''"
+            >&rsaquo;</span>
+            <span class="truncate">{{ categoryLabel(row) }}</span>
+          </button>
+          <span class="flex-shrink-0 flex items-center gap-1.5">
+            <span
+              class="text-xs font-mono tabular-nums"
+              :class="row.status === 'over' ? 'text-ink font-semibold' : row.status === 'warning' ? 'text-ink' : 'text-fog'"
+            >{{ row.status === 'over' ? 'OVER' : row.percent + '%' }}</span>
+            <button
+              v-if="editable"
+              type="button"
+              class="w-4 h-4 flex items-center justify-center text-fog hover:text-ink transition-colors disabled:opacity-40"
+              :disabled="rowState[row.id]?.saving"
+              :aria-label="`Stop tracking ${categoryLabel(row)}`"
+              @click.stop="deleteBudget(row)"
+            >
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5"
+                   stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </span>
+        </div>
         <button
           type="button"
-          class="w-full text-left"
+          class="w-full text-left block"
           :class="row.category_mid === null ? 'cursor-pointer' : 'cursor-default'"
           @click="toggleCat(row)"
         >
-          <div class="flex justify-between items-baseline mb-1.5 gap-2">
-            <span class="flex items-center gap-1 text-sm text-ink min-w-0">
-              <span
-                v-if="row.category_mid === null"
-                class="font-mono text-fog transition-transform duration-150 flex-shrink-0"
-                :class="openCat === row.category ? 'rotate-90' : ''"
-              >&rsaquo;</span>
-              <span class="truncate">{{ row.category }}</span>
-            </span>
-            <span
-              class="flex-shrink-0 text-xs font-mono tabular-nums"
-              :class="row.status === 'over' ? 'text-ink font-semibold' : row.status === 'warning' ? 'text-ink' : 'text-fog'"
-            >{{ row.status === 'over' ? 'OVER' : row.percent + '%' }}</span>
-          </div>
           <ProgressBar
             :percent="row.percent"
             :variant="row.status === 'over' ? 'over' : row.status === 'warning' ? 'warning' : 'ok'"
@@ -123,6 +174,7 @@ function currentMonth() {
             {{ row.spent.toLocaleString('da-DK') }} / {{ row.limit.toLocaleString('da-DK') }} DKK
           </div>
         </button>
+        <p v-if="rowState[row.id]?.error" class="mt-1 text-[11px] text-ink font-semibold">{{ rowState[row.id].error }}</p>
 
         <!-- Mid-category breakdown -->
         <div
@@ -197,7 +249,7 @@ function currentMonth() {
                             class="min-w-0 flex-1 text-[11px] font-mono bg-paperdim border border-hairline rounded px-1.5 py-1 text-ink disabled:opacity-50"
                             :disabled="!pickers[tx.id].top"
                           >
-                            <option value="" disabled>Sub-category…</option>
+                            <option value="">{{ pickers[tx.id].top ? `— all of ${pickers[tx.id].top} —` : 'Sub-category…' }}</option>
                             <option
                               v-for="mid in (store.categoryTree?.[pickers[tx.id].top] ?? [])"
                               :key="mid"
@@ -209,7 +261,7 @@ function currentMonth() {
                           <button
                             type="button"
                             class="text-[11px] font-mono font-semibold bg-ink text-paper px-2.5 py-1 rounded transition-opacity disabled:opacity-40"
-                            :disabled="!pickers[tx.id].top || !pickers[tx.id].mid || pickers[tx.id].saving"
+                            :disabled="!pickers[tx.id].top || pickers[tx.id].saving"
                             @click="savePicker(tx)"
                           >{{ pickers[tx.id].saving ? 'Saving…' : 'Save' }}</button>
                           <button

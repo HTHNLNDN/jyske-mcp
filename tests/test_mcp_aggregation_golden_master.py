@@ -95,13 +95,17 @@ def test_get_spending_full_json_shape_default_group_by_category(full_schema_stor
 
 
 def test_get_spending_full_json_shape_group_by_mid_with_category_filter(full_schema_storage):
-    _insert_tx(category_top="Food & Dining", category_mid="Restaurants", amount=100.0, currency="DKK", day="2020-03-03")
-    _insert_tx(category_top="Food & Dining", category_mid="Groceries", amount=250.0, currency="DKK", day="2020-03-05")
+    # "Eating Out" must be a real top-level category — get_spending's
+    # category filter param is validated against top_categories()
+    # (jyske_mcp/kernel/categorizer.py), unlike category_mid which is
+    # never validated and can be any grouping label.
+    _insert_tx(category_top="Eating Out", category_mid="Restaurants", amount=100.0, currency="DKK", day="2020-03-03")
+    _insert_tx(category_top="Eating Out", category_mid="Groceries", amount=250.0, currency="DKK", day="2020-03-05")
     _insert_tx(category_top="Transport", category_mid="Fuel", amount=999.0, currency="DKK", day="2020-03-06")  # different top -> excluded
 
     payload = json.loads(server.get_spending(
         date_from="2020-03-01", date_to="2020-03-31",
-        category="Food & Dining", group_by="mid",
+        category="Eating Out", group_by="mid",
     ))
 
     assert payload["group_by"] == "mid"

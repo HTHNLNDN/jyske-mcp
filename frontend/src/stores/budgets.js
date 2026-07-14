@@ -75,6 +75,24 @@ export const useBudgetsStore = defineStore('budgets', {
       return res
     },
 
+    // Creates (or, since the backend upserts on category_top/category_mid/
+    // period, edits) a budget. Only the top-level status list needs
+    // refreshing — spending breakdowns/line items are unaffected by a budget
+    // limit changing.
+    async createBudget({ categoryTop, categoryMid, limitAmount, period }) {
+      const res = await api.createBudget(categoryTop, categoryMid, limitAmount, period)
+      if (!res.ok) return res
+      await this.reloadStatus()
+      return res
+    },
+
+    async deleteBudget(budgetId) {
+      const res = await api.deleteBudget(budgetId)
+      if (!res.ok) return res
+      await this.reloadStatus()
+      return res
+    },
+
     // Same idempotent-cache shape as `load()`, keyed by top-level category
     // name — only the first call per category hits the network.
     async loadBreakdown(category) {

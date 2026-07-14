@@ -70,9 +70,9 @@ def storage(monkeypatch, tmp_path):
     # Avoid touching ~/.config/mcp-bank in _db()'s CONFIG_DIR.mkdir/chmod.
     monkeypatch.setattr(storage_module, "CONFIG_DIR", tmp_path)
 
-    # categorize() hits the merchants cache / MCC lookup — with an empty
-    # merchants table and no mcc these txs categorize to None, which is
-    # fine, we're not asserting on category columns here.
+    # categorize() hits the merchants cache — with an empty merchants
+    # table these txs categorize to None, which is fine, we're not
+    # asserting on category columns here.
 
     return Storage()
 

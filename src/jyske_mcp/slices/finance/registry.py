@@ -179,11 +179,13 @@ TOOL_REGISTRY = ToolRegistry([
         description=(
             "Categorize a merchant by name and optional MCC code.\n\n"
             "Two-step flow:\n"
-            "  - Call without llm_category: tries merchant cache then MCC lookup.\n"
+            "  - Call without llm_category: tries the merchant cache.\n"
             '    Returns the category on hit, or {"needs_llm": true, "raw_name": ...}\n'
             "    to signal that Claude should determine the category and call again.\n"
             '  - Call with llm_category (format "Top > Mid > Leaf"): stores the\n'
-            "    LLM-derived category and returns it."
+            "    LLM-derived category and returns it. Mid must be one of that top\n"
+            "    category's existing sub-categories (or blank) — an unknown mid is\n"
+            "    rejected with the valid list, so pick from it, don't invent one."
         ),
         input_schema={
             "type": "object",
@@ -223,7 +225,7 @@ TOOL_REGISTRY = ToolRegistry([
             "properties": {
                 "category": {
                     "type": "string",
-                    "description": "Top-level category name (e.g. 'Food & Dining').",
+                    "description": "Top-level category name (e.g. 'Bills').",
                 },
                 "limit_amount": {
                     "type": "number",

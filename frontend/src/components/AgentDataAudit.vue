@@ -146,7 +146,7 @@ function downloadJson() {
         </summary>
         <div class="pb-4 pl-5 pr-px">
           <p v-if="!budgets.length" class="text-xs font-mono text-fog/60">No active budgets.</p>
-          <BudgetCard v-else :budgets="budgets" />
+          <BudgetCard v-else :budgets="budgets" :editable="false" />
         </div>
       </details>
 

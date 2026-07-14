@@ -23,7 +23,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from jyske_mcp.kernel.categorizer import category_tree
+from jyske_mcp.kernel.categorizer import category_tree, validate_category_pair
 from jyske_mcp.slices.finance.storage import Storage, PRIMARY_CURRENCY
 from jyske_mcp.slices.finance.tools import goal_pace
 
@@ -40,7 +40,14 @@ class RecategorizeRequest(BaseModel):
                          # transactions.transaction_id (the bank's own unique
                          # reference column).
     category_top: str
-    category_mid: str
+    category_mid: str | None = None
+
+
+class CreateBudgetRequest(BaseModel):
+    category_top: str
+    category_mid: str | None = None
+    limit_amount: float
+    period: str = "monthly"
 
 
 @router.get("/tip/today")
@@ -193,19 +200,36 @@ def budgets_categories():
 
 @router.post("/budgets/recategorize")
 def budgets_recategorize(req: RecategorizeRequest):
-    tree = category_tree()
-    if req.category_top not in tree:
+    # Refactored onto validate_category_pair() (single source of truth
+    # shared with every other categorization write path — see
+    # kernel/categorizer.py). category_mid is now optional here too, same
+    # "falsy mid = valid, no mid claimed" contract every other write path
+    # already uses — this used to require a non-empty mid (recategorizing
+    # was assumed to always target a specific sub-category), but the
+    # custom-categorization taxonomy ships every top-level category with
+    # zero mid-level entries in v1, so requiring mid made this endpoint
+    # unusable for any of the new categories. Recategorizing to a
+    # top-level-only category (category_mid=None) is now a legitimate case.
+    # Normalize "" to None (real SQL NULL, not an empty string) — same
+    # falsy-mid handling used everywhere else, so an empty-string mid from a
+    # raw API caller behaves identically to an omitted one, and downstream
+    # `row.category_mid === null` checks (e.g. BudgetCard.vue's accordion
+    # scope guard) stay correct regardless of which form the caller sent.
+    category_mid = req.category_mid or None
+
+    top_valid, mid_valid = validate_category_pair(req.category_top, category_mid)
+    if not top_valid:
         return JSONResponse(
             {"detail": f"Unknown category_top: {req.category_top}"}, status_code=400
         )
-    if req.category_mid not in tree[req.category_top]:
+    if not mid_valid:
         return JSONResponse(
             {"detail": f"Unknown category_mid: {req.category_mid} for {req.category_top}"},
             status_code=400,
         )
 
     result = Storage().recategorize_from_transaction(
-        req.transaction_id, req.category_top, req.category_mid
+        req.transaction_id, req.category_top, category_mid
     )
     if result is None:
         return JSONResponse({"detail": "Transaction not found"}, status_code=404)
@@ -215,6 +239,42 @@ def budgets_recategorize(req: RecategorizeRequest):
         "raw_name": result["raw_name"],
         "old_category_top": result["old_category_top"],
         "new_category_top": req.category_top,
-        "new_category_mid": req.category_mid,
+        "new_category_mid": category_mid,
         "transactions_updated": result["transactions_updated"],
     }
+
+
+@router.post("/budgets")
+def create_budget(req: CreateBudgetRequest):
+    # Also how "edit" works: Storage.set_budget() already replaces-on-conflict
+    # (deactivates any existing active row for the same top+mid+period, then
+    # inserts) — so re-POSTing with a new limit_amount for the same combo is
+    # the update path. Deliberately no separate edit endpoint/write path.
+    top_valid, mid_valid = validate_category_pair(req.category_top, req.category_mid)
+    if not top_valid:
+        return JSONResponse(
+            {"detail": f"Unknown category_top: {req.category_top}"}, status_code=400
+        )
+    if not mid_valid:
+        return JSONResponse(
+            {"detail": f"Unknown category_mid: {req.category_mid} for {req.category_top}"},
+            status_code=400,
+        )
+    if req.limit_amount <= 0:
+        return JSONResponse({"detail": "limit_amount must be positive"}, status_code=400)
+    if req.period not in {"monthly", "weekly"}:
+        return JSONResponse({"detail": "period must be 'monthly' or 'weekly'"}, status_code=400)
+
+    Storage().set_budget(
+        category_top=req.category_top, category_mid=req.category_mid,
+        limit_amount=req.limit_amount, period=req.period,
+    )
+    return {"ok": True, **req.model_dump()}
+
+
+@router.delete("/budgets/{budget_id}")
+def delete_budget(budget_id: int):
+    deleted = Storage().deactivate_budget(budget_id)
+    if not deleted:
+        return JSONResponse({"detail": "Budget not found"}, status_code=404)
+    return {"ok": True}
